@@ -21,12 +21,36 @@ services:
     networks:
       - synapse
 
+  synapse-api:
+    image: python:3.12-slim
+    container_name: synapse-api
+    restart: unless-stopped
+    working_dir: /app
+    command:
+      [
+        "python",
+        "scripts/server.py",
+        "--host",
+        "0.0.0.0",
+        "--port",
+        "8080",
+        "--db",
+        "data/decisions.db",
+      ]
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./:/app
+    networks:
+      - synapse
+
   meeting-bot:
     build: ./meeting-bot
     container_name: synapse-meeting-bot
     restart: unless-stopped
     depends_on:
       - n8n
+      - synapse-api
       - whisper
     ports:
       - "9001:9001"

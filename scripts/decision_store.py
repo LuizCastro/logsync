@@ -124,6 +124,14 @@ class DecisionStore:
             ).fetchall()
         return [self._row_to_dict(r) for r in rows]
 
+    def get_actions(self, limit: int = 200) -> list:
+        rows = self.conn.execute(
+            """SELECT * FROM action_plans
+               ORDER BY created_at DESC LIMIT ?""",
+            (limit,),
+        ).fetchall()
+        return [self._row_to_dict(r) for r in rows]
+
     def complete_action(self, action_id: str):
         self.conn.execute(
             """UPDATE action_plans

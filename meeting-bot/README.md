@@ -50,8 +50,11 @@ docker-compose up -d meeting-bot
 
 | Variável | Descrição | Padrão |
 |----------|-----------|--------|
-| `GOOGLE_BOT_EMAIL` | Email do bot | - |
-| `GOOGLE_BOT_PASSWORD` | Senha/App Password | - |
+| `BOT_EMAIL` | Email do bot (Outlook/Hotmail ou Gmail) | - |
+| `BOT_PASSWORD` | Senha/App Password do bot | - |
+| `GOOGLE_BOT_EMAIL` | Alias legado para `BOT_EMAIL` | - |
+| `GOOGLE_BOT_PASSWORD` | Alias legado para `BOT_PASSWORD` | - |
+| `CALENDAR_PROVIDER` | Provedor do calendário (`hotmail`, `outlook`, `live`) | `hotmail` |
 | `GOOGLE_CREDENTIALS_FILE` | Caminho para service account JSON | `/app/credentials/google-service-account.json` |
 | `GOOGLE_CALENDAR_ID` | ID do calendário | `primary` |
 | `N8N_WEBHOOK_URL` | URL do webhook n8n | `http://synapse-n8n:5678/webhook/synapse-meeting` |

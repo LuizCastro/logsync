@@ -13,8 +13,9 @@ from pathlib import Path
 
 log = logging.getLogger("synapse-bot.calendar")
 
-BOT_EMAIL = os.getenv("GOOGLE_BOT_EMAIL", "")
-BOT_PASSWORD = os.getenv("GOOGLE_BOT_PASSWORD", "")
+CALENDAR_PROVIDER = os.getenv("CALENDAR_PROVIDER", "hotmail").strip().lower()
+BOT_EMAIL = os.getenv("BOT_EMAIL") or os.getenv("GOOGLE_BOT_EMAIL", "")
+BOT_PASSWORD = os.getenv("BOT_PASSWORD") or os.getenv("GOOGLE_BOT_PASSWORD", "")
 PROCESSED_DIR = Path("/app/data/processed")
 PROCESSED_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -51,21 +52,40 @@ class CalendarWatcher:
             log.warning("No email credentials configured")
             return False
 
+        if CALENDAR_PROVIDER not in {"hotmail", "outlook", "live"}:
+            log.warning(
+                "CALENDAR_PROVIDER=%s is not explicitly supported by this watcher. "
+                "Proceeding with Outlook login flow.",
+                CALENDAR_PROVIDER,
+            )
+
         try:
-            log.info("Navigating to Outlook login...")
+            log.info("Navigating to Outlook login (provider=%s)...", CALENDAR_PROVIDER)
             await self.page.goto("https://login.live.com/", wait_until="domcontentloaded", timeout=60000)
             await self.page.wait_for_timeout(5000)
 
             email_input = self.page.locator('input[type="email"]')
             await email_input.wait_for(timeout=15000)
             await email_input.fill(BOT_EMAIL)
-            await self.page.locator('#idSIButton9').click()
+            # The Outlook login screen can change element IDs frequently.
+            # Press Enter first, then try known submit button selectors.
+            await email_input.press("Enter")
+            await self._click_first_available([
+                "#idSIButton9",
+                'button[type="submit"]',
+                'input[type="submit"]',
+            ])
             await self.page.wait_for_timeout(5000)
 
             pw_input = self.page.locator('input[type="password"]')
             await pw_input.wait_for(timeout=15000)
             await pw_input.fill(BOT_PASSWORD)
-            await self.page.locator('#idSIButton9').click()
+            await pw_input.press("Enter")
+            await self._click_first_available([
+                "#idSIButton9",
+                'button[type="submit"]',
+                'input[type="submit"]',
+            ])
             await self.page.wait_for_timeout(8000)
 
             try:
@@ -89,6 +109,18 @@ class CalendarWatcher:
         except Exception as e:
             log.error(f"Login error: {e}")
             return False
+
+    async def _click_first_available(self, selectors):
+        """Try to click the first visible submit-like element, if present."""
+        for sel in selectors:
+            try:
+                btn = self.page.locator(sel).first
+                if await btn.is_visible(timeout=1200):
+                    await btn.click()
+                    return True
+            except Exception:
+                continue
+        return False
 
     async def get_upcoming_meetings(self, minutes_ahead=15):
         manual = self._check_pending_file()

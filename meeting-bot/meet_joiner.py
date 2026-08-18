@@ -8,12 +8,13 @@ import logging
 import os
 import tempfile
 import time
+import wave
 from pathlib import Path
 
 log = logging.getLogger("synapse-bot.joiner")
 
-GOOGLE_EMAIL = os.getenv("GOOGLE_BOT_EMAIL", "")
-GOOGLE_PASSWORD = os.getenv("GOOGLE_BOT_PASSWORD", "")
+GOOGLE_EMAIL = os.getenv("BOT_EMAIL") or os.getenv("GOOGLE_BOT_EMAIL", "")
+GOOGLE_PASSWORD = os.getenv("BOT_PASSWORD") or os.getenv("GOOGLE_BOT_PASSWORD", "")
 
 
 class MeetJoiner:
@@ -44,10 +45,15 @@ class MeetJoiner:
     async def join_and_record(self, meet_url: str, duration_seconds: int) -> str | None:
         page = await self.context.new_page()
         try:
-            await self._login_if_needed(page)
             log.info(f"Navigating to: {meet_url}")
             await page.goto(meet_url, wait_until="networkidle", timeout=30000)
             await asyncio.sleep(3)
+
+            # If Meet redirects to Google auth, perform login and go back.
+            await self._login_if_needed(page)
+            if "accounts.google.com" in page.url:
+                await page.goto(meet_url, wait_until="networkidle", timeout=30000)
+                await asyncio.sleep(3)
 
             await self._handle_join_ui(page)
             log.info("Joined meeting, recording audio...")
@@ -76,8 +82,7 @@ class MeetJoiner:
             log.info("No Google credentials configured, skipping login")
             return
 
-        current_url = page.url
-        if "accounts.google.com" in current_url:
+        if "accounts.google.com" in page.url:
             log.info("Logging into Google...")
             await page.fill('input[type="email"]', GOOGLE_EMAIL)
             await page.click('#identifierNext')

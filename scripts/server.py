@@ -77,7 +77,7 @@ class SynapseHandler(SimpleHTTPRequestHandler):
 
     def _get_actions(self):
         store = DecisionStore(self.db_path)
-        actions = store.get_pending_actions()
+        actions = store.get_actions()
         store.close()
         return actions
 

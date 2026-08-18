@@ -154,11 +154,9 @@
         // ── Fetch data from n8n ─────────────────────────────
         async function fetchData() {
             try {
-                // In production, these hit n8n webhooks that query SQLite
-                // For demo, we use local JSON files or mock data
                 const [decisionsRes, actionsRes] = await Promise.all([
-                    fetch(`${API_BASE}/decisions`).catch(() => null),
-                    fetch(`${API_BASE}/action-items`).catch(() => null),
+                    fetch(`${API_BASE}/api/decisions`).catch(() => null),
+                    fetch(`${API_BASE}/api/actions`).catch(() => null),
                 ]);
 
                 if (decisionsRes?.ok) {
@@ -260,9 +258,25 @@
         async function toggleAction(id) {
             const action = allActions.find(a => a.id === id);
             if (!action) return;
-            action.status = action.status === 'done' ? 'pending' : 'done';
+
+            // Keep the API contract simple: only pending -> done is persisted.
+            if (action.status === 'pending') {
+                try {
+                    await fetch(`${API_BASE}/api/actions/complete`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ id }),
+                    });
+                    await fetchData();
+                } catch (e) {
+                    console.error('Failed to complete action', e);
+                }
+                return;
+            }
+
+            // Local fallback for demo data where there is no backend.
+            action.status = 'pending';
             render();
-            // TODO: POST to n8n webhook to persist
         }
 
         // ── Demo Data ───────────────────────────────────────
