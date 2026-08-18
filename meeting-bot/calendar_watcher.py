@@ -18,6 +18,8 @@ BOT_EMAIL = os.getenv("BOT_EMAIL") or os.getenv("GOOGLE_BOT_EMAIL", "")
 BOT_PASSWORD = os.getenv("BOT_PASSWORD") or os.getenv("GOOGLE_BOT_PASSWORD", "")
 PROCESSED_DIR = Path("/app/data/processed")
 PROCESSED_DIR.mkdir(parents=True, exist_ok=True)
+DEBUG_DIR = Path("/app/data/debug")
+DEBUG_DIR.mkdir(parents=True, exist_ok=True)
 
 MEETING_URLS = re.compile(
     r'https://teams\.microsoft\.com/l/meetup-join/[^\s"\'<>]+|'
@@ -61,7 +63,7 @@ class CalendarWatcher:
 
         try:
             log.info("Navigating to Outlook login (provider=%s)...", CALENDAR_PROVIDER)
-            await self.page.goto("https://login.live.com/", wait_until="domcontentloaded", timeout=60000)
+            await self.page.goto("https://login.live.com/login.srf", wait_until="domcontentloaded", timeout=60000)
             await self.page.wait_for_timeout(5000)
 
             await self._prepare_microsoft_login_screen()
@@ -83,6 +85,7 @@ class CalendarWatcher:
                 'input[type="password"]',
             ], timeout_ms=25000)
             if pw_input is None:
+                await self._dump_login_debug("password-not-found")
                 raise RuntimeError("password input not found")
 
             await pw_input.fill(BOT_PASSWORD)
@@ -140,6 +143,23 @@ class CalendarWatcher:
             if await self._is_any_visible(password_selectors):
                 return True
 
+            # In some flows, selecting the account tile is required after email step.
+            await self._click_first_available([
+                f'text={BOT_EMAIL}',
+                '[data-test-id="account"]',
+                '[role="button"][data-report-event*="Signin"]',
+            ])
+
+            # Some Microsoft account flows require switching to password-based auth.
+            await self._click_first_available([
+                'text=Sign-in options',
+                'text=Opções de entrada',
+                'text=Use your password',
+                'text=Usar sua senha',
+                'text=Use password instead',
+                'text=Usar senha',
+            ])
+
             # Enter first, then click likely submit controls.
             try:
                 email_input = self.page.locator('#i0116, input[name="loginfmt"], input[type="email"]').first
@@ -166,6 +186,11 @@ class CalendarWatcher:
                 'text=Usar outra conta',
             ])
 
+            try:
+                await self.page.keyboard.press("Enter")
+            except Exception:
+                pass
+
             await self.page.wait_for_timeout(1800)
 
         return await self._is_any_visible(password_selectors)
@@ -178,6 +203,35 @@ class CalendarWatcher:
             except Exception:
                 continue
         return False
+
+    async def _dump_login_debug(self, reason):
+        """Persist page artifacts to diagnose login flow changes on Microsoft pages."""
+        ts = int(time.time())
+        base = DEBUG_DIR / f"login-{reason}-{ts}"
+        try:
+            await self.page.screenshot(path=str(base.with_suffix(".png")), full_page=True)
+        except Exception:
+            pass
+
+        try:
+            html = await self.page.content()
+            base.with_suffix(".html").write_text(html, encoding="utf-8")
+        except Exception:
+            pass
+
+        try:
+            title = await self.page.title()
+        except Exception:
+            title = "unknown"
+
+        snippet = ""
+        try:
+            body_text = await self.page.inner_text("body")
+            snippet = re.sub(r"\s+", " ", body_text)[:800]
+        except Exception:
+            snippet = "(body text unavailable)"
+
+        log.error("Login debug dump saved: %s.* | title=%s | text_snippet=%s", base, title, snippet)
 
     async def _wait_for_first_visible(self, selectors, timeout_ms=15000):
         """Return the first selector that becomes visible within timeout."""
