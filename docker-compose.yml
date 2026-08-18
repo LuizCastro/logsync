@@ -38,7 +38,7 @@ services:
         "data/decisions.db",
       ]
     ports:
-      - "8081:8080"
+      - "${SYNAPSE_API_HOST_PORT:-18082}:8080"
     volumes:
       - ./:/app
     networks:
