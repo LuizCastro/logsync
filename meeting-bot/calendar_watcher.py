@@ -75,15 +75,7 @@ class CalendarWatcher:
                 raise RuntimeError("email input not found")
 
             await email_input.fill(BOT_EMAIL)
-            # The Outlook login screen can change element IDs frequently.
-            # Press Enter first, then try known submit button selectors.
-            await email_input.press("Enter")
-            await self._click_first_available([
-                "#idSIButton9",
-                'button[type="submit"]',
-                'input[type="submit"]',
-            ])
-            await self.page.wait_for_timeout(5000)
+            await self._advance_after_email()
 
             pw_input = await self._wait_for_first_visible([
                 '#i0118',
@@ -126,12 +118,66 @@ class CalendarWatcher:
 
     async def _prepare_microsoft_login_screen(self):
         """Handle account picker or alternate entry links before typing email."""
+        # Cookie/privacy banners can block interactions in headless mode.
+        await self._click_first_available([
+            '#wcpConsentBannerCtrl button[type="submit"]',
+            'button:has-text("Accept")',
+            'button:has-text("Aceitar")',
+        ])
+
         await self._click_first_available([
             'text=Use another account',
             'text=Usar outra conta',
             'text=Use a different account',
             'text=Sign in with another account',
         ])
+
+    async def _advance_after_email(self):
+        """Try multiple submit paths until password screen is available."""
+        password_selectors = ['#i0118', 'input[name="passwd"]', 'input[type="password"]']
+
+        for _ in range(4):
+            if await self._is_any_visible(password_selectors):
+                return True
+
+            # Enter first, then click likely submit controls.
+            try:
+                email_input = self.page.locator('#i0116, input[name="loginfmt"], input[type="email"]').first
+                if await email_input.is_visible(timeout=600):
+                    await email_input.press("Enter")
+            except Exception:
+                pass
+
+            await self._click_first_available([
+                '#idSIButton9',
+                'input[type="submit"]',
+                'button[type="submit"]',
+                'button:has-text("Next")',
+                'button:has-text("Próximo")',
+                'text=Next',
+                'text=Próximo',
+                'text=Use password instead',
+                'text=Usar senha',
+            ])
+
+            # Some flows return to account picker and require selecting "use another account" again.
+            await self._click_first_available([
+                'text=Use another account',
+                'text=Usar outra conta',
+            ])
+
+            await self.page.wait_for_timeout(1800)
+
+        return await self._is_any_visible(password_selectors)
+
+    async def _is_any_visible(self, selectors):
+        for sel in selectors:
+            try:
+                if await self.page.locator(sel).first.is_visible(timeout=500):
+                    return True
+            except Exception:
+                continue
+        return False
 
     async def _wait_for_first_visible(self, selectors, timeout_ms=15000):
         """Return the first selector that becomes visible within timeout."""
