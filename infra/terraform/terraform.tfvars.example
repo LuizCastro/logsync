@@ -1,0 +1,21 @@
+# OCI Credentials
+tenancy_ocid     = "ocid1.tenancy.oc1..aaaaaaaa..."
+user_ocid        = "ocid1.user.oc1..aaaaaaaa..."
+fingerprint      = "aa:bb:cc:dd:ee:ff:00:11:22:33:44:55:66:77:88:99"
+private_key_path = "~/.oci/oci_api_key.pem"
+region           = "sa-saopaulo-1"
+
+# SSH Key (generate with: ssh-keygen -t rsa -b 4096 -f ~/.ssh/synapse_key)
+ssh_public_key = "ssh-rsa AAAA..."
+
+# Instance Config
+instance_shape        = "VM.Standard.E4.Flex"
+instance_ocpus        = 2
+instance_memory_in_gbs = 8
+
+# n8n Credentials
+n8n_user     = "synapse"
+n8n_password = "synapse2024"
+
+# Optional: use existing compartment
+# compartment_ocid = "ocid1.compartment.oc1..aaaaaaaa..."

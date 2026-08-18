@@ -1,0 +1,64 @@
+version: "3.3"
+
+services:
+  n8n:
+    image: n8nio/n8n:latest
+    container_name: synapse-n8n
+    restart: unless-stopped
+    ports:
+      - "5678:5678"
+    environment:
+      - N8N_BASIC_AUTH_ACTIVE=true
+      - N8N_BASIC_AUTH_USER=synapse
+      - N8N_BASIC_AUTH_PASSWORD=synapse2024
+      - GENERIC_TIMEZONE=America/Sao_Paulo
+      - TZ=America/Sao_Paulo
+      - WEBHOOK_URL=http://localhost:5678
+      - N8N_SECURE_COOKIE=false
+    volumes:
+      - n8n_data:/home/node/.n8n
+      - ./data:/home/node/synapse-data
+    networks:
+      - synapse
+
+  meeting-bot:
+    build: ./meeting-bot
+    container_name: synapse-meeting-bot
+    restart: unless-stopped
+    depends_on:
+      - n8n
+      - whisper
+    ports:
+      - "9001:9001"
+    env_file:
+      - ./meeting-bot/.env
+    environment:
+      - N8N_WEBHOOK_URL=http://synapse-n8n:5678/webhook/synapse-meeting
+      - WHISPER_URL=http://synapse-whisper:9000
+      - BOT_WEBHOOK_PORT=9001
+      - TZ=America/Sao_Paulo
+    volumes:
+      - ./meeting-bot/credentials:/app/credentials:ro
+      - ./data:/app/data
+    networks:
+      - synapse
+
+  whisper:
+    image: onerahmet/openai-whisper-asr-webservice:latest
+    container_name: synapse-whisper
+    restart: unless-stopped
+    ports:
+      - "9000:9000"
+    environment:
+      - ASR_MODEL=small
+      - ASR_ENGINE=openai_whisper
+      - TZ=America/Sao_Paulo
+    networks:
+      - synapse
+
+volumes:
+  n8n_data:
+
+networks:
+  synapse:
+    driver: bridge

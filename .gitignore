@@ -1,0 +1,19 @@
+# segredos
+.env
+.env.*
+*.pem
+*.key
+
+# runtime/dados
+data/
+.n8n/
+*.log
+
+# python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# node
+node_modules/

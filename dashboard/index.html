@@ -1,0 +1,311 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Synapse — Decision Board</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: 'Inter', -apple-system, sans-serif; background: #0a0a0f; color: #e0e0e0; }
+
+        .header {
+            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+            padding: 20px 32px;
+            border-bottom: 1px solid #2a2a3e;
+            display: flex; justify-content: space-between; align-items: center;
+        }
+        .header h1 { font-size: 24px; font-weight: 700; }
+        .header h1 span { color: #7c3aed; }
+        .header .stats { display: flex; gap: 24px; font-size: 14px; color: #888; }
+        .header .stats .num { color: #7c3aed; font-weight: 700; font-size: 20px; }
+
+        .container { display: grid; grid-template-columns: 1fr 1fr; gap: 0; min-height: calc(100vh - 72px); }
+
+        .panel { padding: 24px; overflow-y: auto; }
+        .panel-left { border-right: 1px solid #1a1a2e; }
+        .panel h2 { font-size: 16px; text-transform: uppercase; letter-spacing: 1px; color: #666; margin-bottom: 16px; }
+
+        /* Decision Cards */
+        .decision-card {
+            background: #12121c;
+            border: 1px solid #2a2a3e;
+            border-radius: 12px;
+            padding: 16px;
+            margin-bottom: 12px;
+            transition: border-color 0.2s;
+            animation: slideIn 0.3s ease-out;
+        }
+        .decision-card:hover { border-color: #7c3aed; }
+        .decision-card .title { font-weight: 600; font-size: 15px; margin-bottom: 6px; }
+        .decision-card .decision { font-size: 13px; color: #aaa; margin-bottom: 8px; }
+        .decision-card .meta { display: flex; gap: 12px; font-size: 11px; color: #666; }
+        .decision-card .confidence {
+            display: inline-block; padding: 2px 8px; border-radius: 12px;
+            font-size: 11px; font-weight: 600;
+        }
+        .confidence-high { background: #1a3a1a; color: #4ade80; }
+        .confidence-med { background: #3a3a1a; color: #facc15; }
+        .decision-card .owner { color: #7c3aed; }
+        .decision-card .source-tag {
+            display: inline-block; padding: 2px 6px; border-radius: 4px;
+            font-size: 10px; background: #1e1e2e; color: #888;
+        }
+        .decision-card .rationale { font-size: 12px; color: #777; margin-top: 8px; font-style: italic; }
+        .decision-card .alternatives { font-size: 12px; color: #666; margin-top: 6px; }
+        .decision-card .alternatives strong { color: #888; }
+
+        /* Action Items */
+        .action-item {
+            background: #12121c;
+            border: 1px solid #2a2a3e;
+            border-radius: 8px;
+            padding: 12px 16px;
+            margin-bottom: 8px;
+            display: flex; align-items: center; gap: 12px;
+            transition: border-color 0.2s;
+        }
+        .action-item:hover { border-color: #7c3aed; }
+        .action-item .checkbox {
+            width: 20px; height: 20px; border-radius: 50%;
+            border: 2px solid #444; cursor: pointer; flex-shrink: 0;
+            display: flex; align-items: center; justify-content: center;
+        }
+        .action-item .checkbox:hover { border-color: #7c3aed; }
+        .action-item.done .checkbox { background: #7c3aed; border-color: #7c3aed; }
+        .action-item.done .checkbox::after { content: "✓"; color: white; font-size: 12px; }
+        .action-item.done .action-text { text-decoration: line-through; color: #555; }
+        .action-item .action-text { font-size: 13px; flex: 1; }
+        .action-item .priority-high { color: #ef4444; }
+        .action-item .priority-medium { color: #f59e0b; }
+        .action-item .meta-right { font-size: 11px; color: #666; text-align: right; }
+
+        /* Live indicator */
+        .live-badge {
+            display: inline-flex; align-items: center; gap: 6px;
+            background: #1a3a1a; padding: 4px 12px; border-radius: 16px;
+            font-size: 12px; color: #4ade80; font-weight: 600;
+        }
+        .live-dot { width: 8px; height: 8px; border-radius: 50%; background: #4ade80; animation: pulse 1.5s infinite; }
+
+        /* Timeline */
+        .timeline { position: relative; padding-left: 24px; }
+        .timeline::before {
+            content: ''; position: absolute; left: 8px; top: 0; bottom: 0;
+            width: 2px; background: #2a2a3e;
+        }
+        .timeline-item { position: relative; margin-bottom: 16px; }
+        .timeline-item::before {
+            content: ''; position: absolute; left: -20px; top: 6px;
+            width: 10px; height: 10px; border-radius: 50%;
+            background: #7c3aed; border: 2px solid #0a0a0f;
+        }
+        .timeline-item .time { font-size: 11px; color: #666; }
+
+        @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
+        @keyframes slideIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+
+        /* Empty state */
+        .empty { text-align: center; padding: 48px; color: #444; }
+        .empty .icon { font-size: 48px; margin-bottom: 12px; }
+
+        /* Search */
+        .search-bar {
+            width: 100%; padding: 10px 16px; background: #12121c;
+            border: 1px solid #2a2a3e; border-radius: 8px; color: #e0e0e0;
+            font-size: 14px; margin-bottom: 16px; outline: none;
+        }
+        .search-bar:focus { border-color: #7c3aed; }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1><span>Synapse</span> — Decision Board</h1>
+        <div style="display:flex; align-items:center; gap:24px;">
+            <div class="stats">
+                <div><div class="num" id="total-decisions">0</div>decisions</div>
+                <div><div class="num" id="pending-actions">0</div>pending</div>
+                <div><div class="num" id="done-actions">0</div>done</div>
+            </div>
+            <div class="live-badge"><div class="live-dot"></div>LIVE</div>
+        </div>
+    </div>
+
+    <div class="container">
+        <!-- LEFT: Decisions Timeline -->
+        <div class="panel panel-left">
+            <h2>Decisions</h2>
+            <input type="text" class="search-bar" placeholder="Search decisions..." id="search" oninput="filterDecisions()">
+            <div class="timeline" id="decisions-list"></div>
+        </div>
+
+        <!-- RIGHT: Action Items -->
+        <div class="panel">
+            <h2>Action Items</h2>
+            <div id="actions-list"></div>
+        </div>
+    </div>
+
+    <script>
+        // ── Config ──────────────────────────────────────────
+        const API_BASE = window.location.origin; // same-origin API server
+        let allDecisions = [];
+        let allActions = [];
+
+        // ── Fetch data from n8n ─────────────────────────────
+        async function fetchData() {
+            try {
+                // In production, these hit n8n webhooks that query SQLite
+                // For demo, we use local JSON files or mock data
+                const [decisionsRes, actionsRes] = await Promise.all([
+                    fetch(`${API_BASE}/decisions`).catch(() => null),
+                    fetch(`${API_BASE}/action-items`).catch(() => null),
+                ]);
+
+                if (decisionsRes?.ok) {
+                    allDecisions = await decisionsRes.json();
+                }
+                if (actionsRes?.ok) {
+                    allActions = await actionsRes.json();
+                }
+            } catch (e) {
+                console.log('API not available, using demo data');
+                loadDemoData();
+            }
+            render();
+        }
+
+        // ── Render ──────────────────────────────────────────
+        function render() {
+            renderDecisions();
+            renderActions();
+            renderStats();
+        }
+
+        function renderDecisions() {
+            const container = document.getElementById('decisions-list');
+            const search = document.getElementById('search').value.toLowerCase();
+
+            const filtered = allDecisions.filter(d =>
+                !search || d.title?.toLowerCase().includes(search) ||
+                d.decision?.toLowerCase().includes(search)
+            );
+
+            if (filtered.length === 0) {
+                container.innerHTML = '<div class="empty"><div class="icon">🧠</div>No decisions yet.<br>Send a meeting recording or Slack message to get started.</div>';
+                return;
+            }
+
+            container.innerHTML = filtered.map(d => {
+                const confClass = d.confidence >= 0.8 ? 'confidence-high' : 'confidence-med';
+                const time = new Date(d.created_at).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+                const altHtml = d.alternatives_rejected?.length
+                    ? `<div class="alternatives"><strong>Rejected:</strong> ${d.alternatives_rejected.join(' · ')}</div>`
+                    : '';
+
+                return `
+                    <div class="timeline-item">
+                        <div class="time">${time}</div>
+                        <div class="decision-card">
+                            <div class="title">${d.title}</div>
+                            <div class="decision">${d.decision}</div>
+                            ${d.rationale ? `<div class="rationale">"${d.rationale}"</div>` : ''}
+                            ${altHtml}
+                            <div class="meta">
+                                <span class="confidence ${confClass}">${Math.round(d.confidence * 100)}%</span>
+                                <span class="source-tag">${d.source}</span>
+                                ${d.owner ? `<span class="owner">→ ${d.owner}</span>` : ''}
+                            </div>
+                        </div>
+                    </div>`;
+            }).join('');
+        }
+
+        function renderActions() {
+            const container = document.getElementById('actions-list');
+            const pending = allActions.filter(a => a.status === 'pending');
+            const done = allActions.filter(a => a.status === 'done');
+
+            if (pending.length === 0 && done.length === 0) {
+                container.innerHTML = '<div class="empty"><div class="icon">✅</div>No action items yet.</div>';
+                return;
+            }
+
+            const renderAction = (a) => {
+                const priClass = a.priority === 'high' ? 'priority-high' : 'priority-medium';
+                return `
+                    <div class="action-item ${a.status === 'done' ? 'done' : ''}">
+                        <div class="checkbox" onclick="toggleAction('${a.id}')"></div>
+                        <div class="action-text">${a.action}</div>
+                        <div class="meta-right">
+                            <div class="${priClass}">${a.priority}</div>
+                            <div>${a.owner || 'unassigned'}</div>
+                        </div>
+                    </div>`;
+            };
+
+            container.innerHTML =
+                (pending.length > 0 ? '<div style="margin-bottom:8px;font-size:12px;color:#666;">PENDING</div>' + pending.map(renderAction).join('') : '') +
+                (done.length > 0 ? '<div style="margin:16px 0 8px;font-size:12px;color:#666;">COMPLETED</div>' + done.map(renderAction).join('') : '');
+        }
+
+        function renderStats() {
+            document.getElementById('total-decisions').textContent = allDecisions.length;
+            document.getElementById('pending-actions').textContent = allActions.filter(a => a.status === 'pending').length;
+            document.getElementById('done-actions').textContent = allActions.filter(a => a.status === 'done').length;
+        }
+
+        // ── Actions ─────────────────────────────────────────
+        function filterDecisions() { renderDecisions(); }
+
+        async function toggleAction(id) {
+            const action = allActions.find(a => a.id === id);
+            if (!action) return;
+            action.status = action.status === 'done' ? 'pending' : 'done';
+            render();
+            // TODO: POST to n8n webhook to persist
+        }
+
+        // ── Demo Data ───────────────────────────────────────
+        function loadDemoData() {
+            allDecisions = [
+                {
+                    id: 'demo_1', title: 'Use PostgreSQL for user data',
+                    decision: 'We will use PostgreSQL as the primary database for user-related data.',
+                    rationale: 'Team has more PostgreSQL experience, relational integrity is critical.',
+                    alternatives_rejected: ['MongoDB — schema flexibility not needed', 'Firebase — vendor lock-in'],
+                    owner: 'Carlos', confidence: 0.92, source: 'meeting',
+                    created_at: new Date().toISOString()
+                },
+                {
+                    id: 'demo_2', title: 'Move sprint planning to async',
+                    decision: 'Sprint planning will be replaced by an async brief + Slack thread.',
+                    rationale: '72% of our sprint plannings are judged ineffective. Decision quality is same.',
+                    alternatives_rejected: ['Keep bi-weekly meeting — tried, didn\'t improve'],
+                    owner: 'Maria', confidence: 0.85, source: 'slack',
+                    created_at: new Date(Date.now() - 3600000).toISOString()
+                },
+                {
+                    id: 'demo_3', title: 'Adopt n8n for automation workflows',
+                    decision: 'All internal automations will use n8n instead of custom Python scripts.',
+                    rationale: 'Lower maintenance, visual debugging, team can modify without code.',
+                    alternatives_rejected: ['Zapier — too expensive at scale', 'Custom Python — maintenance burden'],
+                    owner: 'João', confidence: 0.78, source: 'meeting',
+                    created_at: new Date(Date.now() - 7200000).toISOString()
+                },
+            ];
+
+            allActions = [
+                { id: 'act_1', decision_id: 'demo_1', action: 'Set up PostgreSQL schema by Friday', owner: 'Carlos', priority: 'high', status: 'pending' },
+                { id: 'act_2', decision_id: 'demo_1', action: 'Migrate existing user queries', owner: 'Maria', priority: 'medium', status: 'pending' },
+                { id: 'act_3', decision_id: 'demo_2', action: 'Create async sprint brief template', owner: 'Maria', priority: 'high', status: 'pending' },
+                { id: 'act_4', decision_id: 'demo_3', action: 'Install n8n self-hosted instance', owner: 'João', priority: 'high', status: 'done' },
+            ];
+        }
+
+        // ── Init ────────────────────────────────────────────
+        fetchData();
+        // Auto-refresh every 30s
+        setInterval(fetchData, 30000);
+    </script>
+</body>
+</html>
