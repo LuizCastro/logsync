@@ -64,8 +64,16 @@ class CalendarWatcher:
             await self.page.goto("https://login.live.com/", wait_until="domcontentloaded", timeout=60000)
             await self.page.wait_for_timeout(5000)
 
-            email_input = self.page.locator('input[type="email"]')
-            await email_input.wait_for(timeout=15000)
+            await self._prepare_microsoft_login_screen()
+
+            email_input = await self._wait_for_first_visible([
+                'input[type="email"]',
+                'input[name="loginfmt"]',
+                '#i0116',
+            ], timeout_ms=20000)
+            if email_input is None:
+                raise RuntimeError("email input not found")
+
             await email_input.fill(BOT_EMAIL)
             # The Outlook login screen can change element IDs frequently.
             # Press Enter first, then try known submit button selectors.
@@ -77,8 +85,14 @@ class CalendarWatcher:
             ])
             await self.page.wait_for_timeout(5000)
 
-            pw_input = self.page.locator('input[type="password"]')
-            await pw_input.wait_for(timeout=15000)
+            pw_input = await self._wait_for_first_visible([
+                '#i0118',
+                'input[name="passwd"]',
+                'input[type="password"]',
+            ], timeout_ms=25000)
+            if pw_input is None:
+                raise RuntimeError("password input not found")
+
             await pw_input.fill(BOT_PASSWORD)
             await pw_input.press("Enter")
             await self._click_first_available([
@@ -107,8 +121,31 @@ class CalendarWatcher:
                 return False
 
         except Exception as e:
-            log.error(f"Login error: {e}")
+            log.error("Login error: %s | url=%s", e, self.page.url if self.page else "unknown")
             return False
+
+    async def _prepare_microsoft_login_screen(self):
+        """Handle account picker or alternate entry links before typing email."""
+        await self._click_first_available([
+            'text=Use another account',
+            'text=Usar outra conta',
+            'text=Use a different account',
+            'text=Sign in with another account',
+        ])
+
+    async def _wait_for_first_visible(self, selectors, timeout_ms=15000):
+        """Return the first selector that becomes visible within timeout."""
+        deadline = time.time() + (timeout_ms / 1000)
+        while time.time() < deadline:
+            for sel in selectors:
+                try:
+                    candidate = self.page.locator(sel).first
+                    if await candidate.is_visible(timeout=500):
+                        return candidate
+                except Exception:
+                    continue
+            await self.page.wait_for_timeout(300)
+        return None
 
     async def _click_first_available(self, selectors):
         """Try to click the first visible submit-like element, if present."""
