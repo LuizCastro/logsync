@@ -20,6 +20,7 @@ SAVE_GOOGLE_STATE = os.getenv("SAVE_GOOGLE_STATE", "true").strip().lower() in {"
 MEET_ANONYMOUS_MODE = os.getenv("MEET_ANONYMOUS_MODE", "true").strip().lower() in {"1", "true", "yes", "on"}
 MEET_GUEST_NAME = os.getenv("MEET_GUEST_NAME", "LogSync Bot")
 MEET_APPROVAL_WAIT_SECONDS = int(os.getenv("MEET_APPROVAL_WAIT_SECONDS", "90"))
+MEET_MIN_SESSION_SECONDS = int(os.getenv("MEET_MIN_SESSION_SECONDS", "120"))
 DEBUG_DIR = Path("/app/data/debug")
 DEBUG_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -302,25 +303,14 @@ class MeetJoiner:
 
     async def _is_in_meeting(self, page):
         """Detect whether user is inside an active Meet call screen."""
-        in_call_selectors = [
-            'button[aria-label*="Leave call"]',
-            'button[aria-label*="Sair da chamada"]',
-            'button[aria-label*="Hang up"]',
-            'button:has-text("Leave call")',
-            'button:has-text("Sair da chamada")',
-        ]
-        for sel in in_call_selectors:
-            try:
-                if await page.locator(sel).first.is_visible(timeout=800):
-                    return True
-            except Exception:
-                continue
-
         prejoin_selectors = [
             'button:has-text("Entrar agora")',
             'button:has-text("Join now")',
             'button:has-text("Ask to join")',
+            'button:has-text("Participar")',
+            'button:has-text("Pedir para participar")',
             'input[aria-label*="Your name"]',
+            'input[aria-label*="Seu nome"]',
         ]
         for sel in prejoin_selectors:
             try:
@@ -328,6 +318,45 @@ class MeetJoiner:
                     return False
             except Exception:
                 continue
+
+        if await self._is_waiting_room(page):
+            return False
+
+        in_call_primary = [
+            'button[aria-label*="Leave call"]',
+            'button[aria-label*="Sair da chamada"]',
+            'button[aria-label*="Hang up"]',
+        ]
+        in_call_secondary = [
+            'button[aria-label*="Show everyone"]',
+            'button[aria-label*="Mostrar todos"]',
+            'button[aria-label*="Chat with everyone"]',
+            'button[aria-label*="Conversar com todos"]',
+            'button[aria-label*="Activities"]',
+            'button[aria-label*="Atividades"]',
+            '[data-participant-id]',
+        ]
+
+        has_primary = False
+        for sel in in_call_primary:
+            try:
+                if await page.locator(sel).first.is_visible(timeout=600):
+                    has_primary = True
+                    break
+            except Exception:
+                continue
+
+        if not has_primary:
+            return False
+
+        for sel in in_call_secondary:
+            try:
+                if await page.locator(sel).first.is_visible(timeout=800):
+                    return True
+            except Exception:
+                continue
+
+        return False
         return False
 
     async def _wait_for_join_result(self, page, timeout_seconds=10):
@@ -440,6 +469,13 @@ class MeetJoiner:
                 raw_audio = await self._capture_audio_chunks(page, duration_seconds)
 
             if not raw_audio:
+                if duration_seconds <= 0:
+                    hold = max(10, MEET_MIN_SESSION_SECONDS)
+                    log.warning(
+                        "No audio stream captured; keeping bot in meeting for %ss before fallback",
+                        hold,
+                    )
+                    await asyncio.sleep(hold)
                 fallback_seconds = duration_seconds if duration_seconds > 0 else min(max_duration_seconds, 60)
                 return self._generate_silence_wav(fallback_seconds)
 
@@ -447,6 +483,13 @@ class MeetJoiner:
 
         except Exception as e:
             log.warning(f"CDP audio capture failed: {e}, using silence")
+            if duration_seconds <= 0:
+                hold = max(10, MEET_MIN_SESSION_SECONDS)
+                log.warning(
+                    "Audio capture backend unavailable; keeping bot in meeting for %ss before fallback",
+                    hold,
+                )
+                await asyncio.sleep(hold)
             fallback_seconds = duration_seconds if duration_seconds > 0 else min(max_duration_seconds, 60)
             return self._generate_silence_wav(fallback_seconds)
 
