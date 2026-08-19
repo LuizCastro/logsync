@@ -3,6 +3,8 @@
 .env.*
 *.pem
 *.key
+meeting-bot/credentials/*.json
+google-storage-state.json
 
 # runtime/dados
 data/

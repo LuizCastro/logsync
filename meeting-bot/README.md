@@ -4,7 +4,7 @@ Bot que entra automaticamente em reuniões Google Meet, grava áudio e transcrev
 
 ## Como funciona
 
-```
+```text
 Google Calendar (convite) → Bot detecta → Entra no Meet → Grava áudio → Whisper transcreve → n8n processa
 ```
 
@@ -49,7 +49,7 @@ docker-compose up -d meeting-bot
 ## Variáveis de Ambiente
 
 | Variável | Descrição | Padrão |
-|----------|-----------|--------|
+| -------- | --------- | ------ |
 | `BOT_EMAIL` | Email do bot (Outlook/Hotmail ou Gmail) | - |
 | `BOT_PASSWORD` | Senha/App Password do bot | - |
 | `GOOGLE_BOT_EMAIL` | Alias legado para `BOT_EMAIL` | - |
@@ -61,10 +61,48 @@ docker-compose up -d meeting-bot
 | `WHISPER_URL` | URL do Whisper API | `http://synapse-whisper:9000` |
 | `CHECK_INTERVAL_MINUTES` | Intervalo de checagem | `3` |
 | `RECORDING_DURATION_SECONDS` | Duração máxima gravação | `1800` (30min) |
+| `RECORD_UNTIL_END` | Grava até o fim da reunião quando `duration_seconds` não é enviado | `true` |
+| `MAX_RECORDING_SECONDS` | Limite de segurança para gravação contínua | `14400` (4h) |
+| `GOOGLE_STORAGE_STATE_PATH` | Caminho para cookies/sessão Google do Playwright | `/app/credentials/google-storage-state.json` |
+| `SAVE_GOOGLE_STATE` | Salva/atualiza sessão Google após login bem-sucedido | `true` |
+
+### Servidor sem interface (headless)
+
+Se sua VM não tem navegador, use sessão Google persistida (cookies) para o Meet:
+
+1. Em uma máquina com interface, faça login no Google e exporte o `storage_state` do Playwright.
+1. Copie o arquivo para o servidor em `meeting-bot/credentials/google-storage-state.json`.
+1. Configure no `.env`:
+
+```bash
+GOOGLE_STORAGE_STATE_PATH=/app/credentials/google-storage-state.json
+SAVE_GOOGLE_STATE=true
+```
+
+1. Recrie o bot:
+
+```bash
+sudo docker compose up -d --build --force-recreate meeting-bot
+```
+
+Comandos práticos:
+
+```bash
+# Na sua máquina com interface (Windows/Linux/macOS)
+cd meeting-bot
+python export_google_storage_state.py --output google-storage-state.json
+
+# Enviar para o servidor
+scp google-storage-state.json ubuntu@SEU_SERVIDOR_IP:~/hackathon-agent-oficial/synapse/meeting-bot/credentials/google-storage-state.json
+
+# No servidor
+cd ~/hackathon-agent-oficial/synapse
+sudo docker compose up -d --build --force-recreate meeting-bot
+```
 
 ## Arquitetura
 
-```
+```text
 ┌─────────────────┐     ┌──────────────┐     ┌──────────────┐
 │  Google Calendar │────▶│  Meeting Bot │────▶│   Whisper    │
 │  (convites)     │     │  (Playwright)│     │  (transcrição)│

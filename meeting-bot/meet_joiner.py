@@ -15,6 +15,11 @@ log = logging.getLogger("synapse-bot.joiner")
 
 GOOGLE_EMAIL = os.getenv("GOOGLE_BOT_EMAIL") or os.getenv("BOT_EMAIL", "")
 GOOGLE_PASSWORD = os.getenv("GOOGLE_BOT_PASSWORD") or os.getenv("BOT_PASSWORD", "")
+GOOGLE_STORAGE_STATE_PATH = os.getenv("GOOGLE_STORAGE_STATE_PATH", "/app/credentials/google-storage-state.json")
+SAVE_GOOGLE_STATE = os.getenv("SAVE_GOOGLE_STATE", "true").strip().lower() in {"1", "true", "yes", "on"}
+MEET_ANONYMOUS_MODE = os.getenv("MEET_ANONYMOUS_MODE", "true").strip().lower() in {"1", "true", "yes", "on"}
+MEET_GUEST_NAME = os.getenv("MEET_GUEST_NAME", "LogSync Bot")
+MEET_APPROVAL_WAIT_SECONDS = int(os.getenv("MEET_APPROVAL_WAIT_SECONDS", "90"))
 DEBUG_DIR = Path("/app/data/debug")
 DEBUG_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -38,16 +43,24 @@ class MeetJoiner:
                 "--disable-background-networking",
             ],
         )
-        self.context = await self.browser.new_context(
-            permissions=["microphone", "camera"],
-            user_agent="Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/131.0.0.0 Safari/537.36",
-        )
+        context_kwargs = {
+            "permissions": ["microphone", "camera"],
+            "user_agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/131.0.0.0 Safari/537.36",
+        }
+        if GOOGLE_STORAGE_STATE_PATH and Path(GOOGLE_STORAGE_STATE_PATH).exists():
+            context_kwargs["storage_state"] = GOOGLE_STORAGE_STATE_PATH
+            log.info("Loaded Google storage state from %s", GOOGLE_STORAGE_STATE_PATH)
+
+        self.context = await self.browser.new_context(**context_kwargs)
         log.info("Playwright browser initialized")
 
     async def join_and_record(self, meet_url: str, duration_seconds: int, max_duration_seconds: int = 14400) -> str | None:
         page = await self.context.new_page()
         try:
-            await self._ensure_google_session(page)
+            if not MEET_ANONYMOUS_MODE:
+                await self._ensure_google_session(page)
+            else:
+                log.info("Using anonymous Meet mode (host approval expected)")
 
             log.info(f"Navigating to: {meet_url}")
             await page.goto(meet_url, wait_until="networkidle", timeout=30000)
@@ -98,20 +111,107 @@ class MeetJoiner:
 
         if "accounts.google.com" in page.url:
             log.info("Logging into Google...")
-            email = page.locator('input[type="email"], input[name="identifier"]').first
-            await email.wait_for(timeout=15000)
-            await email.fill(GOOGLE_EMAIL)
-            await page.locator('#identifierNext, button:has-text("Next")').first.click()
-            await asyncio.sleep(2)
+            await self._prepare_google_signin(page)
 
-            pw = page.locator('input[type="password"], input[name="Passwd"]').first
-            await pw.wait_for(timeout=20000)
+            email = await self._wait_for_first_visible(page, [
+                'input[type="email"]',
+                'input[name="identifier"]',
+                '#identifierId',
+            ], timeout_ms=18000)
+            if email is not None:
+                await email.fill(GOOGLE_EMAIL)
+                await self._click_first_available(page, [
+                    '#identifierNext',
+                    'button:has-text("Next")',
+                    'div[role="button"]:has-text("Next")',
+                ])
+                await asyncio.sleep(2)
+            else:
+                # Account chooser screen: click matching account or switch account.
+                await self._click_first_available(page, [
+                    f'text={GOOGLE_EMAIL}',
+                    'text=Use another account',
+                    'text=Usar outra conta',
+                ])
+
+            await self._click_first_available(page, [
+                'text=Try another way',
+                'text=Use your password',
+                'text=Enter your password',
+                'text=Tentar de outra forma',
+                'text=Use sua senha',
+                'text=Digite sua senha',
+            ])
+
+            pw = await self._wait_for_first_visible(page, [
+                'input[type="password"]',
+                'input[name="Passwd"]',
+            ], timeout_ms=22000)
+            if pw is None:
+                await self._dump_google_login_debug(page, "password-not-found")
+                raise RuntimeError("google password input not found")
+
             await pw.fill(GOOGLE_PASSWORD)
-            await page.locator('#passwordNext, button:has-text("Next")').first.click()
-            await asyncio.sleep(4)
+            await self._click_first_available(page, [
+                '#passwordNext',
+                'button:has-text("Next")',
+                'div[role="button"]:has-text("Next")',
+            ])
+            await asyncio.sleep(5)
 
             if "challenge" in (page.url or ""):
                 log.warning("Google account requires additional verification challenge")
+                await self._dump_google_login_debug(page, "challenge")
+
+    async def _prepare_google_signin(self, page):
+        await self._click_first_available(page, [
+            'text=Use another account',
+            'text=Usar outra conta',
+            'text=Sign in with another account',
+        ])
+
+    async def _wait_for_first_visible(self, page, selectors, timeout_ms=15000):
+        end = time.time() + (timeout_ms / 1000)
+        while time.time() < end:
+            for sel in selectors:
+                try:
+                    cand = page.locator(sel).first
+                    if await cand.is_visible(timeout=500):
+                        return cand
+                except Exception:
+                    continue
+            await asyncio.sleep(0.3)
+        return None
+
+    async def _click_first_available(self, page, selectors):
+        for sel in selectors:
+            try:
+                btn = page.locator(sel).first
+                if await btn.is_visible(timeout=800):
+                    await btn.click()
+                    return True
+            except Exception:
+                continue
+        return False
+
+    async def _dump_google_login_debug(self, page, reason):
+        ts = int(time.time())
+        base = DEBUG_DIR / f"google-login-{reason}-{ts}"
+        try:
+            await page.screenshot(path=str(base.with_suffix('.png')), full_page=True)
+        except Exception:
+            pass
+        snippet = ""
+        try:
+            snippet = (await page.inner_text("body")).replace("\n", " ")[:700]
+        except Exception:
+            snippet = "(body unavailable)"
+        title = "unknown"
+        try:
+            title = await page.title()
+        except Exception:
+            pass
+        log.warning("Google login debug saved: %s.* | title=%s | url=%s | text=%s", base, title, page.url, snippet)
 
     async def _ensure_google_session(self, page):
         """Authenticate at Google first so Meet links don't get blocked as anonymous."""
@@ -129,6 +229,16 @@ class MeetJoiner:
             # Touch Meet homepage to finalize session cookies before room navigation.
             await page.goto("https://meet.google.com/", wait_until="domcontentloaded", timeout=30000)
             await asyncio.sleep(2)
+
+            if SAVE_GOOGLE_STATE and GOOGLE_STORAGE_STATE_PATH:
+                try:
+                    out = Path(GOOGLE_STORAGE_STATE_PATH)
+                    out.parent.mkdir(parents=True, exist_ok=True)
+                    await page.context.storage_state(path=str(out))
+                    log.info("Saved Google storage state to %s", out)
+                except Exception as save_err:
+                    log.warning("Failed to save Google storage state: %s", save_err)
+
             log.info("Google session prepared for Meet access")
         except Exception as e:
             log.warning(f"Failed to prepare Google session: {e}")
@@ -139,6 +249,8 @@ class MeetJoiner:
             'button:has-text("Join now")',
             'button:has-text("Participar")',
             'button:has-text("Ask to join")',
+            'button:has-text("Pedir para participar")',
+            'button:has-text("Solicitar para entrar")',
             '[data-testid="join-button"]',
             'div[role="button"]:has-text("Join")',
         ]
@@ -156,8 +268,11 @@ class MeetJoiner:
                     if await self._wait_for_join_result(page, timeout_seconds=12):
                         return True
                     if await self._is_waiting_room(page):
-                        log.warning("Join request sent; still waiting for host approval")
-                        await self._dump_join_debug(page, "waiting-room")
+                        log.warning("Join request sent; waiting for host approval")
+                        approved = await self._wait_for_host_approval(page, MEET_APPROVAL_WAIT_SECONDS)
+                        if approved:
+                            return True
+                        await self._dump_join_debug(page, "waiting-room-timeout")
                         return False
                     log.warning("Join button clicked but in-meeting state not detected")
             except Exception:
@@ -168,8 +283,11 @@ class MeetJoiner:
             return True
 
         if await self._is_waiting_room(page):
-            log.warning("Still in waiting room; host approval required")
-            await self._dump_join_debug(page, "waiting-room-no-click")
+            log.warning("Still in waiting room; waiting for host approval")
+            approved = await self._wait_for_host_approval(page, MEET_APPROVAL_WAIT_SECONDS)
+            if approved:
+                return True
+            await self._dump_join_debug(page, "waiting-room-no-click-timeout")
             return False
 
         page_title = "unknown"
@@ -228,6 +346,8 @@ class MeetJoiner:
             'text=Alguém na chamada permitirá sua entrada em instantes',
             'text=Asking to join',
             'text=Pedindo para entrar',
+            'text=Requested to join',
+            'text=Solicitação enviada',
             'text=You can\'t join this call',
             'text=Você não pode entrar nesta chamada',
         ]
@@ -250,7 +370,33 @@ class MeetJoiner:
             try:
                 field = page.locator(sel).first
                 if await field.is_visible(timeout=600):
-                    await field.fill("LogSync Bot")
+                    await field.fill(MEET_GUEST_NAME)
+                    return True
+            except Exception:
+                continue
+        return False
+
+    async def _wait_for_host_approval(self, page, timeout_seconds):
+        end = time.time() + max(5, timeout_seconds)
+        while time.time() < end:
+            if await self._is_in_meeting(page):
+                log.info("Host approved join request")
+                return True
+            if await self._is_hard_blocked(page):
+                return False
+            await asyncio.sleep(1)
+        return await self._is_in_meeting(page)
+
+    async def _is_hard_blocked(self, page):
+        blocked_markers = [
+            'text=You can\'t join this video call',
+            'text=Você não pode entrar nesta chamada de vídeo',
+            'text=Returning to home screen',
+            'text=Voltando para a tela inicial',
+        ]
+        for sel in blocked_markers:
+            try:
+                if await page.locator(sel).first.is_visible(timeout=500):
                     return True
             except Exception:
                 continue
