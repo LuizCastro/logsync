@@ -34,6 +34,8 @@ CHECK_INTERVAL_MINUTES = int(os.getenv("CHECK_INTERVAL_MINUTES", "3"))
 RECORDING_DURATION = int(os.getenv("RECORDING_DURATION_SECONDS", "600"))
 WEBHOOK_PORT = int(os.getenv("BOT_WEBHOOK_PORT", "9001"))
 CALENDAR_ENABLED = os.getenv("CALENDAR_ENABLED", "true").strip().lower() in {"1", "true", "yes", "on"}
+RECORD_UNTIL_END = os.getenv("RECORD_UNTIL_END", "true").strip().lower() in {"1", "true", "yes", "on"}
+MAX_RECORDING_SECONDS = int(os.getenv("MAX_RECORDING_SECONDS", "14400"))
 
 
 class MeetingBot:
@@ -85,7 +87,7 @@ class MeetingBot:
             meeting_id = data.get("meeting_id", f"manual_{int(time.time())}")
             participants = data.get("participants", [])
             title = data.get("title", "Manual Meeting")
-            duration = data.get("duration_seconds", RECORDING_DURATION)
+            duration = data.get("duration_seconds")
 
             log.info(f"Manual join: {meet_url}")
             asyncio.create_task(self._handle_meeting({
@@ -131,7 +133,14 @@ class MeetingBot:
             log.error(f"Calendar check failed: {e}")
 
     async def _handle_meeting(self, meeting, duration=None):
-        duration = duration or RECORDING_DURATION
+        if duration is None:
+            duration = 0 if RECORD_UNTIL_END else RECORDING_DURATION
+        else:
+            try:
+                duration = int(duration)
+            except (TypeError, ValueError):
+                duration = RECORDING_DURATION
+
         summary = meeting.get("summary", "Untitled")
         meet_url = meeting.get("meet_url")
         meeting_id = meeting.get("id", "unknown")
@@ -139,7 +148,11 @@ class MeetingBot:
 
         log.info(f"Joining: {summary}")
 
-        audio_path = await self.joiner.join_and_record(meet_url, duration)
+        audio_path = await self.joiner.join_and_record(
+            meet_url,
+            duration_seconds=duration,
+            max_duration_seconds=MAX_RECORDING_SECONDS,
+        )
         if not audio_path:
             log.error(f"Failed to record: {summary}")
             return

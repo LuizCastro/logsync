@@ -15,6 +15,8 @@ log = logging.getLogger("synapse-bot.joiner")
 
 GOOGLE_EMAIL = os.getenv("BOT_EMAIL") or os.getenv("GOOGLE_BOT_EMAIL", "")
 GOOGLE_PASSWORD = os.getenv("BOT_PASSWORD") or os.getenv("GOOGLE_BOT_PASSWORD", "")
+DEBUG_DIR = Path("/app/data/debug")
+DEBUG_DIR.mkdir(parents=True, exist_ok=True)
 
 
 class MeetJoiner:
@@ -42,7 +44,7 @@ class MeetJoiner:
         )
         log.info("Playwright browser initialized")
 
-    async def join_and_record(self, meet_url: str, duration_seconds: int) -> str | None:
+    async def join_and_record(self, meet_url: str, duration_seconds: int, max_duration_seconds: int = 14400) -> str | None:
         page = await self.context.new_page()
         try:
             log.info(f"Navigating to: {meet_url}")
@@ -60,9 +62,15 @@ class MeetJoiner:
                 log.error("Meeting join was not confirmed; aborting recording")
                 return None
 
-            log.info("Joined meeting, recording audio...")
+            if duration_seconds <= 0:
+                log.info(
+                    "Joined meeting, recording until end (max=%ss)...",
+                    max_duration_seconds,
+                )
+            else:
+                log.info("Joined meeting, recording audio...")
 
-            audio_data = await self._record_audio(page, duration_seconds)
+            audio_data = await self._record_audio(page, duration_seconds, max_duration_seconds)
             if not audio_data:
                 return None
 
@@ -104,22 +112,35 @@ class MeetJoiner:
             '[data-testid="join-button"]',
             'div[role="button"]:has-text("Join")',
         ]
+
+        # If pre-join asks for guest name, provide one to enable join request.
+        await self._fill_guest_name_if_needed(page)
+
         for sel in selectors:
             try:
                 btn = page.locator(sel).first
                 if await btn.is_visible(timeout=3000):
                     await btn.click()
                     log.info(f"Clicked join button: {sel}")
-                    await asyncio.sleep(3)
-                    if await self._is_in_meeting(page):
+                    await asyncio.sleep(2)
+                    if await self._wait_for_join_result(page, timeout_seconds=12):
                         return True
-                    log.warning("Join button clicked but in-meeting state not detected yet")
+                    if await self._is_waiting_room(page):
+                        log.warning("Join request sent; still waiting for host approval")
+                        await self._dump_join_debug(page, "waiting-room")
+                        return False
+                    log.warning("Join button clicked but in-meeting state not detected")
             except Exception:
                 continue
 
-        if await self._is_in_meeting(page):
+        if await self._wait_for_join_result(page, timeout_seconds=8):
             log.info("In-meeting state detected without explicit join click")
             return True
+
+        if await self._is_waiting_room(page):
+            log.warning("Still in waiting room; host approval required")
+            await self._dump_join_debug(page, "waiting-room-no-click")
+            return False
 
         page_title = "unknown"
         try:
@@ -127,6 +148,7 @@ class MeetJoiner:
         except Exception:
             pass
 
+        await self._dump_join_debug(page, "join-not-confirmed")
         log.error("Could not confirm meeting join | url=%s | title=%s", page.url, page_title)
         return False
 
@@ -158,11 +180,74 @@ class MeetJoiner:
                     return False
             except Exception:
                 continue
+        return False
 
-        # Fallback: if URL is still a meet room and prejoin is gone, treat as likely joined.
-        return "meet.google.com" in (page.url or "")
+    async def _wait_for_join_result(self, page, timeout_seconds=10):
+        end = time.time() + timeout_seconds
+        while time.time() < end:
+            if await self._is_in_meeting(page):
+                return True
+            if await self._is_waiting_room(page):
+                return False
+            await asyncio.sleep(0.5)
+        return await self._is_in_meeting(page)
 
-    async def _record_audio(self, page, duration_seconds: int) -> bytes | None:
+    async def _is_waiting_room(self, page):
+        waiting_markers = [
+            'text=Someone in the call will let you in soon',
+            'text=Alguém na chamada permitirá sua entrada em instantes',
+            'text=Asking to join',
+            'text=Pedindo para entrar',
+            'text=You can\'t join this call',
+            'text=Você não pode entrar nesta chamada',
+        ]
+        for sel in waiting_markers:
+            try:
+                if await page.locator(sel).first.is_visible(timeout=500):
+                    return True
+            except Exception:
+                continue
+        return False
+
+    async def _fill_guest_name_if_needed(self, page):
+        name_inputs = [
+            'input[aria-label*="Your name"]',
+            'input[aria-label*="Seu nome"]',
+            'input[placeholder*="name"]',
+            'input[placeholder*="nome"]',
+        ]
+        for sel in name_inputs:
+            try:
+                field = page.locator(sel).first
+                if await field.is_visible(timeout=600):
+                    await field.fill("LogSync Bot")
+                    return True
+            except Exception:
+                continue
+        return False
+
+    async def _dump_join_debug(self, page, reason):
+        ts = int(time.time())
+        base = DEBUG_DIR / f"meet-{reason}-{ts}"
+        try:
+            await page.screenshot(path=str(base.with_suffix(".png")), full_page=True)
+        except Exception:
+            pass
+
+        try:
+            title = await page.title()
+        except Exception:
+            title = "unknown"
+
+        snippet = ""
+        try:
+            snippet = (await page.inner_text("body")).replace("\n", " ")[:700]
+        except Exception:
+            snippet = "(body text unavailable)"
+
+        log.warning("Join debug saved: %s.* | title=%s | url=%s | text=%s", base, title, page.url, snippet)
+
+    async def _record_audio(self, page, duration_seconds: int, max_duration_seconds: int = 14400) -> bytes | None:
         """Capture audio from browser using CDP media stream."""
         try:
             cdp = await page.context.new_cdp_session(page)
@@ -171,16 +256,23 @@ class MeetJoiner:
                 "video": False,
             })
 
-            log.info(f"Recording for {duration_seconds}s...")
-            raw_audio = await self._capture_audio_chunks(page, duration_seconds)
+            if duration_seconds <= 0:
+                log.info(f"Recording until meeting end (max {max_duration_seconds}s)...")
+                raw_audio = await self._capture_audio_until_meeting_end(page, max_duration_seconds)
+            else:
+                log.info(f"Recording for {duration_seconds}s...")
+                raw_audio = await self._capture_audio_chunks(page, duration_seconds)
+
             if not raw_audio:
-                return self._generate_silence_wav(duration_seconds)
+                fallback_seconds = duration_seconds if duration_seconds > 0 else min(max_duration_seconds, 60)
+                return self._generate_silence_wav(fallback_seconds)
 
             return raw_audio
 
         except Exception as e:
             log.warning(f"CDP audio capture failed: {e}, using silence")
-            return self._generate_silence_wav(duration_seconds)
+            fallback_seconds = duration_seconds if duration_seconds > 0 else min(max_duration_seconds, 60)
+            return self._generate_silence_wav(fallback_seconds)
 
     async def _capture_audio_chunks(self, page, duration_seconds: int) -> bytes | None:
         """Try to capture audio via JS MediaRecorder in the browser."""
@@ -224,6 +316,84 @@ class MeetJoiner:
                 return base64.b64decode(result)
         except Exception as e:
             log.warning(f"Browser audio capture failed: {e}")
+
+        return None
+
+    async def _capture_audio_until_meeting_end(self, page, max_duration_seconds: int) -> bytes | None:
+        """Record audio and stop when the meeting appears to end, with a max cap."""
+        js_code = """
+        async () => {
+            return new Promise((resolve, reject) => {
+                try {
+                    const inCallSelectors = [
+                        'button[aria-label*="Leave call"]',
+                        'button[aria-label*="Sair da chamada"]',
+                        'button[aria-label*="Hang up"]'
+                    ];
+
+                    const isInCall = () => inCallSelectors.some((sel) => !!document.querySelector(sel));
+
+                    const audioCtx = new AudioContext();
+                    const dest = audioCtx.createMediaStreamDestination();
+
+                    document.querySelectorAll('audio, video').forEach(el => {
+                        try {
+                            const src = audioCtx.createMediaElementSource(el);
+                            src.connect(dest);
+                            src.connect(audioCtx.destination);
+                        } catch(e) {}
+                    });
+
+                    const recorder = new MediaRecorder(dest.stream, {mimeType: 'audio/webm'});
+                    const chunks = [];
+
+                    recorder.ondataavailable = (e) => {
+                        if (e && e.data && e.data.size > 0) chunks.push(e.data);
+                    };
+
+                    recorder.onstop = () => {
+                        try {
+                            const blob = new Blob(chunks, {type: 'audio/webm'});
+                            const reader = new FileReader();
+                            reader.onloadend = () => resolve(reader.result.split(',')[1]);
+                            reader.readAsDataURL(blob);
+                        } catch (err) {
+                            reject(String(err));
+                        }
+                    };
+
+                    recorder.start(1000);
+
+                    const maxMs = %d * 1000;
+                    const start = Date.now();
+                    let missingChecks = 0;
+
+                    const iv = setInterval(() => {
+                        const elapsed = Date.now() - start;
+
+                        if (isInCall()) {
+                            missingChecks = 0;
+                        } else {
+                            missingChecks += 1;
+                        }
+
+                        if (elapsed >= maxMs || missingChecks >= 3) {
+                            clearInterval(iv);
+                            if (recorder.state !== 'inactive') recorder.stop();
+                        }
+                    }, 2000);
+                } catch(e) { reject(e.message || String(e)); }
+            });
+        }
+        """ % max_duration_seconds
+
+        try:
+            result = await page.evaluate(js_code)
+            if result:
+                import base64
+                return base64.b64decode(result)
+        except Exception as e:
+            log.warning(f"Browser audio capture-until-end failed: {e}")
 
         return None
 
