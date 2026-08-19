@@ -24,11 +24,19 @@ class Transcriber:
 
         try:
             url = f"{self.whisper_url}/asr"
+            ext = Path(audio_path).suffix.lower()
+            if ext == ".webm":
+                upload_name = "audio.webm"
+                content_type = "audio/webm"
+            else:
+                upload_name = "audio.wav"
+                content_type = "audio/wav"
+
             with open(audio_path, "rb") as f:
                 audio_bytes = f.read()
 
             form = aiohttp.FormData()
-            form.add_field("audio_file", audio_bytes, filename="audio.wav", content_type="audio/wav")
+            form.add_field("audio_file", audio_bytes, filename=upload_name, content_type=content_type)
             form.add_field("language", language)
             form.add_field("task", "transcribe")
 

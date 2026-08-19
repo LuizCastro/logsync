@@ -115,14 +115,16 @@ class MeetJoiner:
             else:
                 log.info("Joined meeting, recording audio...")
 
-            audio_data = await self._record_audio(page, duration_seconds, max_duration_seconds)
-            if not audio_data:
+            recording = await self._record_audio(page, duration_seconds, max_duration_seconds)
+            if not recording:
                 return None
 
-            tmp = tempfile.NamedTemporaryFile(suffix=".wav", delete=False)
+            audio_data, suffix, mime = recording
+
+            tmp = tempfile.NamedTemporaryFile(suffix=suffix, delete=False)
             tmp.write(audio_data)
             tmp.close()
-            log.info(f"Audio saved: {tmp.name}")
+            log.info("Audio saved: %s (mime=%s)", tmp.name, mime)
             return tmp.name
 
         except Exception as e:
@@ -413,7 +415,6 @@ class MeetJoiner:
                 continue
 
         return False
-        return False
 
     async def _wait_for_join_result(self, page, timeout_seconds=10):
         end = time.time() + timeout_seconds
@@ -584,15 +585,9 @@ class MeetJoiner:
         except Exception:
             return False
 
-    async def _record_audio(self, page, duration_seconds: int, max_duration_seconds: int = 14400) -> bytes | None:
-        """Capture audio from browser using CDP media stream."""
+    async def _record_audio(self, page, duration_seconds: int, max_duration_seconds: int = 14400) -> tuple[bytes, str, str] | None:
+        """Capture audio from browser using MediaRecorder; fallback to silence WAV."""
         try:
-            cdp = await page.context.new_cdp_session(page)
-            await cdp.send("Emulation.setMediaStreamOverride", {
-                "audio": True,
-                "video": False,
-            })
-
             if duration_seconds <= 0:
                 log.info(f"Recording until meeting end (max {max_duration_seconds}s)...")
                 raw_audio = await self._capture_audio_until_meeting_end(page, max_duration_seconds)
@@ -600,21 +595,23 @@ class MeetJoiner:
                 log.info(f"Recording for {duration_seconds}s...")
                 raw_audio = await self._capture_audio_chunks(page, duration_seconds)
 
-            if not raw_audio:
-                if duration_seconds <= 0:
-                    hold = max(10, MEET_MIN_SESSION_SECONDS)
-                    log.warning(
-                        "No audio stream captured; keeping bot in meeting for %ss before fallback",
-                        hold,
-                    )
-                    await asyncio.sleep(hold)
-                fallback_seconds = duration_seconds if duration_seconds > 0 else min(max_duration_seconds, 60)
-                return self._generate_silence_wav(fallback_seconds)
+            if raw_audio:
+                # MediaRecorder chunks are webm; keep original format for Whisper.
+                return raw_audio, ".webm", "audio/webm"
 
-            return raw_audio
+            if duration_seconds <= 0:
+                hold = max(10, MEET_MIN_SESSION_SECONDS)
+                log.warning(
+                    "No audio stream captured; keeping bot in meeting for %ss before fallback",
+                    hold,
+                )
+                await asyncio.sleep(hold)
+
+            fallback_seconds = duration_seconds if duration_seconds > 0 else min(max_duration_seconds, 60)
+            return self._generate_silence_wav(fallback_seconds), ".wav", "audio/wav"
 
         except Exception as e:
-            log.warning(f"CDP audio capture failed: {e}, using silence")
+            log.warning(f"Audio capture failed: {e}, using silence")
             if duration_seconds <= 0:
                 hold = max(10, MEET_MIN_SESSION_SECONDS)
                 log.warning(
@@ -623,7 +620,7 @@ class MeetJoiner:
                 )
                 await asyncio.sleep(hold)
             fallback_seconds = duration_seconds if duration_seconds > 0 else min(max_duration_seconds, 60)
-            return self._generate_silence_wav(fallback_seconds)
+            return self._generate_silence_wav(fallback_seconds), ".wav", "audio/wav"
 
     async def _capture_audio_chunks(self, page, duration_seconds: int) -> bytes | None:
         """Try to capture audio via JS MediaRecorder in the browser."""
