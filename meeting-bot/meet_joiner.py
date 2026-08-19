@@ -21,6 +21,8 @@ MEET_ANONYMOUS_MODE = os.getenv("MEET_ANONYMOUS_MODE", "true").strip().lower() i
 MEET_GUEST_NAME = os.getenv("MEET_GUEST_NAME", "LogSync Bot")
 MEET_APPROVAL_WAIT_SECONDS = int(os.getenv("MEET_APPROVAL_WAIT_SECONDS", "90"))
 MEET_MIN_SESSION_SECONDS = int(os.getenv("MEET_MIN_SESSION_SECONDS", "120"))
+MEET_USE_FAKE_MEDIA = os.getenv("MEET_USE_FAKE_MEDIA", "false").strip().lower() in {"1", "true", "yes", "on"}
+MEET_GRANT_MEDIA_PERMISSIONS = os.getenv("MEET_GRANT_MEDIA_PERMISSIONS", "false").strip().lower() in {"1", "true", "yes", "on"}
 DEBUG_DIR = Path("/app/data/debug")
 DEBUG_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -34,18 +36,24 @@ class MeetJoiner:
     async def init(self):
         from playwright.async_api import async_playwright
         self.playwright = await async_playwright().start()
-        self.browser = await self.playwright.chromium.launch(
-            headless=True,
-            args=[
-                "--no-sandbox",
-                "--disable-dev-shm-usage",
+        launch_args = [
+            "--no-sandbox",
+            "--disable-dev-shm-usage",
+            "--disable-background-networking",
+        ]
+        if MEET_USE_FAKE_MEDIA:
+            launch_args.extend([
                 "--use-fake-ui-for-media-stream",
                 "--use-fake-device-for-media-stream",
-                "--disable-background-networking",
-            ],
+            ])
+
+        self.browser = await self.playwright.chromium.launch(
+            headless=True,
+            args=launch_args,
         )
+        permissions = ["microphone", "camera"] if MEET_GRANT_MEDIA_PERMISSIONS else []
         context_kwargs = {
-            "permissions": ["microphone", "camera"],
+            "permissions": permissions,
             "user_agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/131.0.0.0 Safari/537.36",
         }
         if GOOGLE_STORAGE_STATE_PATH and Path(GOOGLE_STORAGE_STATE_PATH).exists():
@@ -53,6 +61,11 @@ class MeetJoiner:
             log.info("Loaded Google storage state from %s", GOOGLE_STORAGE_STATE_PATH)
 
         self.context = await self.browser.new_context(**context_kwargs)
+        log.info(
+            "Meet media mode: fake_media=%s, grant_permissions=%s",
+            MEET_USE_FAKE_MEDIA,
+            MEET_GRANT_MEDIA_PERMISSIONS,
+        )
         log.info("Playwright browser initialized")
 
     async def join_and_record(self, meet_url: str, duration_seconds: int, max_duration_seconds: int = 14400) -> str | None:
@@ -258,6 +271,7 @@ class MeetJoiner:
 
         # If pre-join asks for guest name, provide one to enable join request.
         await self._fill_guest_name_if_needed(page)
+        await self._disable_prejoin_av(page)
 
         for sel in selectors:
             try:
@@ -451,6 +465,33 @@ class MeetJoiner:
             snippet = "(body text unavailable)"
 
         log.warning("Join debug saved: %s.* | title=%s | url=%s | text=%s", base, title, page.url, snippet)
+
+    async def _disable_prejoin_av(self, page):
+        """Try to enter Meet with camera and microphone off."""
+        # Keyboard shortcuts in Google Meet pre-join.
+        try:
+            await page.keyboard.press("Control+e")
+            await asyncio.sleep(0.2)
+            await page.keyboard.press("Control+d")
+            await asyncio.sleep(0.2)
+        except Exception:
+            pass
+
+        # Selector-based fallback when shortcuts are blocked.
+        toggle_selectors = [
+            'button[aria-label*="Turn off camera"]',
+            'button[aria-label*="Desativar câmera"]',
+            'button[aria-label*="Turn off microphone"]',
+            'button[aria-label*="Desativar microfone"]',
+        ]
+        for sel in toggle_selectors:
+            try:
+                btn = page.locator(sel).first
+                if await btn.is_visible(timeout=500):
+                    await btn.click()
+                    await asyncio.sleep(0.1)
+            except Exception:
+                continue
 
     async def _record_audio(self, page, duration_seconds: int, max_duration_seconds: int = 14400) -> bytes | None:
         """Capture audio from browser using CDP media stream."""
