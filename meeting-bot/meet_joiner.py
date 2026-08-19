@@ -47,6 +47,8 @@ class MeetJoiner:
     async def join_and_record(self, meet_url: str, duration_seconds: int, max_duration_seconds: int = 14400) -> str | None:
         page = await self.context.new_page()
         try:
+            await self._ensure_google_session(page)
+
             log.info(f"Navigating to: {meet_url}")
             await page.goto(meet_url, wait_until="networkidle", timeout=30000)
             await asyncio.sleep(3)
@@ -96,12 +98,40 @@ class MeetJoiner:
 
         if "accounts.google.com" in page.url:
             log.info("Logging into Google...")
-            await page.fill('input[type="email"]', GOOGLE_EMAIL)
-            await page.click('#identifierNext')
+            email = page.locator('input[type="email"], input[name="identifier"]').first
+            await email.wait_for(timeout=15000)
+            await email.fill(GOOGLE_EMAIL)
+            await page.locator('#identifierNext, button:has-text("Next")').first.click()
             await asyncio.sleep(2)
-            await page.fill('input[type="password"]', GOOGLE_PASSWORD)
-            await page.click('#passwordNext')
-            await asyncio.sleep(3)
+
+            pw = page.locator('input[type="password"], input[name="Passwd"]').first
+            await pw.wait_for(timeout=20000)
+            await pw.fill(GOOGLE_PASSWORD)
+            await page.locator('#passwordNext, button:has-text("Next")').first.click()
+            await asyncio.sleep(4)
+
+            if "challenge" in (page.url or ""):
+                log.warning("Google account requires additional verification challenge")
+
+    async def _ensure_google_session(self, page):
+        """Authenticate at Google first so Meet links don't get blocked as anonymous."""
+        if not GOOGLE_EMAIL or not GOOGLE_PASSWORD:
+            log.warning("Google credentials not configured; meeting may be blocked as anonymous")
+            return
+
+        try:
+            await page.goto("https://accounts.google.com/", wait_until="domcontentloaded", timeout=30000)
+            await asyncio.sleep(2)
+
+            if "accounts.google.com" in (page.url or ""):
+                await self._login_if_needed(page)
+
+            # Touch Meet homepage to finalize session cookies before room navigation.
+            await page.goto("https://meet.google.com/", wait_until="domcontentloaded", timeout=30000)
+            await asyncio.sleep(2)
+            log.info("Google session prepared for Meet access")
+        except Exception as e:
+            log.warning(f"Failed to prepare Google session: {e}")
 
     async def _handle_join_ui(self, page):
         selectors = [
