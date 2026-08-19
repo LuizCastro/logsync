@@ -5,6 +5,7 @@
 *.key
 meeting-bot/credentials/*.json
 google-storage-state.json
+!meeting-bot/credentials/google-storage-state.json
 
 # runtime/dados
 data/
