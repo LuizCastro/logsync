@@ -281,6 +281,9 @@ class MeetJoiner:
             'button:has-text("Ask to join")',
             'button:has-text("Pedir para participar")',
             'button:has-text("Solicitar para entrar")',
+            '[role="button"]:has-text("Pedir para participar")',
+            '[role="button"]:has-text("Participar")',
+            '[role="button"]:has-text("Join now")',
             '[data-testid="join-button"]',
             'div[role="button"]:has-text("Join")',
         ]
@@ -288,6 +291,7 @@ class MeetJoiner:
         # If pre-join asks for guest name, provide one to enable join request.
         await self._fill_guest_name_if_needed(page)
         await self._disable_prejoin_av(page)
+        await self._dismiss_blocking_dialogs(page)
 
         for sel in selectors:
             try:
@@ -308,6 +312,28 @@ class MeetJoiner:
                     log.warning("Join button clicked but in-meeting state not detected")
             except Exception:
                 continue
+
+        # Role-based fallback for localized button labels.
+        try:
+            role_btn = page.get_by_role(
+                "button",
+                name=r"(?i)(pedir para participar|participar|join now|ask to join|solicitar para entrar|entrar agora)",
+            ).first
+            if await role_btn.is_visible(timeout=1500):
+                await role_btn.click()
+                log.info("Clicked join button via role-based fallback")
+                await asyncio.sleep(2)
+                if await self._wait_for_join_result(page, timeout_seconds=12):
+                    return True
+        except Exception:
+            pass
+
+        # Last-resort DOM click when Playwright text locators miss custom-rendered controls.
+        if await self._click_join_button_dom_fallback(page):
+            log.info("Clicked join button via DOM fallback")
+            await asyncio.sleep(2)
+            if await self._wait_for_join_result(page, timeout_seconds=12):
+                return True
 
         if await self._wait_for_join_result(page, timeout_seconds=8):
             log.info("In-meeting state detected without explicit join click")
@@ -508,6 +534,55 @@ class MeetJoiner:
                     await asyncio.sleep(0.1)
             except Exception:
                 continue
+
+    async def _dismiss_blocking_dialogs(self, page):
+        """Dismiss permission/info dialogs that can block the join controls."""
+        dismiss_selectors = [
+            'button:has-text("Fechar")',
+            'button:has-text("Close")',
+            '[aria-label="Fechar"]',
+            '[aria-label="Close"]',
+        ]
+        for sel in dismiss_selectors:
+            try:
+                btn = page.locator(sel).first
+                if await btn.is_visible(timeout=500):
+                    await btn.click()
+                    await asyncio.sleep(0.2)
+            except Exception:
+                continue
+
+    async def _click_join_button_dom_fallback(self, page):
+        """Try clicking localized join controls directly in DOM."""
+        js = """
+        () => {
+          const labels = [
+            'pedir para participar',
+            'participar',
+            'join now',
+            'ask to join',
+            'solicitar para entrar',
+            'entrar agora'
+          ];
+          const elements = Array.from(document.querySelectorAll('button, [role="button"], div[role="button"]'));
+          for (const el of elements) {
+            const text = (el.innerText || el.textContent || '').trim().toLowerCase();
+            if (!text) continue;
+            const rect = el.getBoundingClientRect();
+            const visible = rect.width > 0 && rect.height > 0;
+            if (!visible) continue;
+            if (labels.some((l) => text.includes(l))) {
+              el.click();
+              return true;
+            }
+          }
+          return false;
+        }
+        """
+        try:
+            return bool(await page.evaluate(js))
+        except Exception:
+            return False
 
     async def _record_audio(self, page, duration_seconds: int, max_duration_seconds: int = 14400) -> bytes | None:
         """Capture audio from browser using CDP media stream."""
