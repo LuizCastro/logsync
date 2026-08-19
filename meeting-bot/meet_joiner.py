@@ -55,7 +55,11 @@ class MeetJoiner:
                 await page.goto(meet_url, wait_until="networkidle", timeout=30000)
                 await asyncio.sleep(3)
 
-            await self._handle_join_ui(page)
+            joined = await self._handle_join_ui(page)
+            if not joined:
+                log.error("Meeting join was not confirmed; aborting recording")
+                return None
+
             log.info("Joined meeting, recording audio...")
 
             audio_data = await self._record_audio(page, duration_seconds)
@@ -106,11 +110,57 @@ class MeetJoiner:
                 if await btn.is_visible(timeout=3000):
                     await btn.click()
                     log.info(f"Clicked join button: {sel}")
-                    await asyncio.sleep(2)
-                    return
+                    await asyncio.sleep(3)
+                    if await self._is_in_meeting(page):
+                        return True
+                    log.warning("Join button clicked but in-meeting state not detected yet")
             except Exception:
                 continue
-        log.warning("Could not find join button, may already be in meeting")
+
+        if await self._is_in_meeting(page):
+            log.info("In-meeting state detected without explicit join click")
+            return True
+
+        page_title = "unknown"
+        try:
+            page_title = await page.title()
+        except Exception:
+            pass
+
+        log.error("Could not confirm meeting join | url=%s | title=%s", page.url, page_title)
+        return False
+
+    async def _is_in_meeting(self, page):
+        """Detect whether user is inside an active Meet call screen."""
+        in_call_selectors = [
+            'button[aria-label*="Leave call"]',
+            'button[aria-label*="Sair da chamada"]',
+            'button[aria-label*="Hang up"]',
+            'button:has-text("Leave call")',
+            'button:has-text("Sair da chamada")',
+        ]
+        for sel in in_call_selectors:
+            try:
+                if await page.locator(sel).first.is_visible(timeout=800):
+                    return True
+            except Exception:
+                continue
+
+        prejoin_selectors = [
+            'button:has-text("Entrar agora")',
+            'button:has-text("Join now")',
+            'button:has-text("Ask to join")',
+            'input[aria-label*="Your name"]',
+        ]
+        for sel in prejoin_selectors:
+            try:
+                if await page.locator(sel).first.is_visible(timeout=800):
+                    return False
+            except Exception:
+                continue
+
+        # Fallback: if URL is still a meet room and prejoin is gone, treat as likely joined.
+        return "meet.google.com" in (page.url or "")
 
     async def _record_audio(self, page, duration_seconds: int) -> bytes | None:
         """Capture audio from browser using CDP media stream."""

@@ -10,7 +10,7 @@ import logging
 import os
 import tempfile
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 import aiohttp
@@ -146,8 +146,14 @@ class MeetingBot:
 
         transcript = await self.transcriber.transcribe(audio_path)
         if not transcript:
-            log.error(f"Failed to transcribe: {summary}")
-            return
+            log.warning(
+                "Transcription unavailable for '%s'; sending fallback transcript to keep pipeline running",
+                summary,
+            )
+            transcript = (
+                f"No transcript captured for meeting '{summary}'. "
+                f"Recorded at {datetime.utcnow().isoformat()}."
+            )
 
         await self._send_to_n8n({
             "meeting_id": meeting_id,
@@ -155,7 +161,7 @@ class MeetingBot:
             "participants": participants,
             "title": summary,
             "source": "meeting_bot",
-            "recorded_at": datetime.utcnow().isoformat(),
+            "recorded_at": datetime.now(timezone.utc).isoformat(),
         })
 
         try:
