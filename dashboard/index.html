@@ -157,13 +157,15 @@
             const customFromQuery = normalizeBase(new URLSearchParams(window.location.search).get('api'));
             const customFromStorage = normalizeBase(localStorage.getItem('synapse_api_base'));
             const sameOrigin = normalizeBase(window.location.origin);
+            const fallback8080 = normalizeBase(`${window.location.protocol}//${window.location.hostname}:8080`);
             const fallback18082 = normalizeBase(`${window.location.protocol}//${window.location.hostname}:18082`);
 
             return [
                 customFromQuery,
+                sameOrigin,
                 customFromWindow,
                 customFromStorage,
-                sameOrigin,
+                fallback8080,
                 fallback18082,
             ].filter((v, i, arr) => v && arr.indexOf(v) === i);
         }
