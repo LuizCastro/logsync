@@ -158,6 +158,12 @@ class MeetingBot:
             return
 
         transcript = await self.transcriber.transcribe(audio_path)
+        captions_text = self._read_captions_sidecar(audio_path)
+
+        if self._is_low_quality_transcript(transcript) and captions_text:
+            log.warning("Whisper transcript is low quality; using Meet captions fallback")
+            transcript = captions_text
+
         if not transcript:
             log.warning(
                 "Transcription unavailable for '%s'; sending fallback transcript to keep pipeline running",
@@ -181,7 +187,33 @@ class MeetingBot:
             os.unlink(audio_path)
         except OSError:
             pass
+        captions_path = f"{audio_path}.captions.txt"
+        try:
+            os.unlink(captions_path)
+        except OSError:
+            pass
         log.info(f"Done: {summary}")
+
+    def _read_captions_sidecar(self, audio_path: str) -> str | None:
+        path = Path(f"{audio_path}.captions.txt")
+        if not path.exists():
+            return None
+        try:
+            text = path.read_text(encoding="utf-8").strip()
+            return text or None
+        except Exception:
+            return None
+
+    def _is_low_quality_transcript(self, text: str | None) -> bool:
+        if not text:
+            return True
+        tokens = [t for t in text.lower().split() if t.isalpha()]
+        if len(tokens) < 4:
+            return True
+        unique = set(tokens)
+        if len(unique) <= 2:
+            return True
+        return False
 
     async def _send_to_n8n(self, payload):
         try:

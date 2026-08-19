@@ -69,7 +69,7 @@ class DecisionStore:
     def get_recent_decisions(self, days: int = 7, limit: int = 50) -> list:
         rows = self.conn.execute(
             """SELECT * FROM decisions
-               WHERE created_at > datetime('now', ?)
+               WHERE datetime(created_at) > datetime('now', ?)
                ORDER BY created_at DESC LIMIT ?""",
             (f"-{days} days", limit),
         ).fetchall()
@@ -173,7 +173,7 @@ class DecisionStore:
                       COUNT(*) as decisions_count,
                       AVG(confidence) as avg_confidence
                FROM decisions
-               WHERE created_at > datetime('now', ?)
+               WHERE datetime(created_at) > datetime('now', ?)
                GROUP BY day ORDER BY day""",
             (f"-{days} days",),
         ).fetchall()

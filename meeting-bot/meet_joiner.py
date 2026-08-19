@@ -6,6 +6,7 @@ Grava o áudio da reunião usando capture do browser.
 import asyncio
 import logging
 import os
+import re
 import tempfile
 import time
 import wave
@@ -115,7 +116,16 @@ class MeetJoiner:
             else:
                 log.info("Joined meeting, recording audio...")
 
+            captions_task = asyncio.create_task(
+                self._capture_live_captions(
+                    page,
+                    duration_seconds=duration_seconds,
+                    max_duration_seconds=max_duration_seconds,
+                )
+            )
             recording = await self._record_audio(page, duration_seconds, max_duration_seconds)
+            captions_text = await captions_task
+
             if not recording:
                 return None
 
@@ -125,6 +135,11 @@ class MeetJoiner:
             tmp.write(audio_data)
             tmp.close()
             log.info("Audio saved: %s (mime=%s)", tmp.name, mime)
+
+            if captions_text:
+                captions_path = Path(tmp.name + ".captions.txt")
+                captions_path.write_text(captions_text, encoding="utf-8")
+                log.info("Captions saved: %s (%s chars)", captions_path, len(captions_text))
             return tmp.name
 
         except Exception as e:
@@ -584,6 +599,96 @@ class MeetJoiner:
             return bool(await page.evaluate(js))
         except Exception:
             return False
+
+    async def _capture_live_captions(self, page, duration_seconds: int, max_duration_seconds: int) -> str:
+        """Collect live captions during the meeting and return merged text."""
+        try:
+            await self._enable_captions(page)
+        except Exception:
+            pass
+
+        if duration_seconds > 0:
+            target_seconds = duration_seconds
+        else:
+            target_seconds = max_duration_seconds
+
+        end = time.time() + max(5, target_seconds)
+        seen = set()
+        lines = []
+
+        while time.time() < end:
+            try:
+                chunk = await self._read_caption_chunk(page)
+                if chunk:
+                    norm = re.sub(r"\s+", " ", chunk).strip()
+                    if norm and norm not in seen:
+                        seen.add(norm)
+                        lines.append(norm)
+            except Exception:
+                pass
+
+            # For record-until-end mode, stop if meeting is no longer active.
+            if duration_seconds <= 0:
+                try:
+                    if not await self._is_in_meeting(page):
+                        break
+                except Exception:
+                    pass
+
+            await asyncio.sleep(1.0)
+
+        return "\n".join(lines).strip()
+
+    async def _enable_captions(self, page):
+        """Try enabling captions via keyboard and localized buttons."""
+        # Meet shortcut usually toggles captions with "c".
+        try:
+            await page.keyboard.press("c")
+            await asyncio.sleep(0.2)
+        except Exception:
+            pass
+
+        candidates = [
+            'button[aria-label*="Turn on captions"]',
+            'button[aria-label*="Ativar legendas"]',
+            'button[aria-label*="Legendas"]',
+            'button:has-text("Ativar legendas")',
+            'button:has-text("Turn on captions")',
+        ]
+        for sel in candidates:
+            try:
+                btn = page.locator(sel).first
+                if await btn.is_visible(timeout=400):
+                    await btn.click()
+                    await asyncio.sleep(0.2)
+                    return
+            except Exception:
+                continue
+
+    async def _read_caption_chunk(self, page) -> str:
+        """Read visible captions text from common Meet caption containers."""
+        js = """
+        () => {
+          const selectors = [
+            '[aria-live="polite"]',
+            '[aria-live="assertive"]',
+            '[class*="captions"]',
+            '[class*="caption"]',
+            '[data-is-muted]'
+          ];
+          const texts = [];
+          for (const sel of selectors) {
+            document.querySelectorAll(sel).forEach((el) => {
+              const t = (el.innerText || el.textContent || '').trim();
+              if (t && t.length > 2) texts.push(t);
+            });
+          }
+          if (!texts.length) return '';
+          return texts.join('\n');
+        }
+        """
+        result = await page.evaluate(js)
+        return (result or "").strip()
 
     async def _record_audio(self, page, duration_seconds: int, max_duration_seconds: int = 14400) -> tuple[bytes, str, str] | None:
         """Capture audio from browser using MediaRecorder; fallback to silence WAV."""

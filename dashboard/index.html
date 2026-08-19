@@ -147,28 +147,66 @@
 
     <script>
         // ── Config ──────────────────────────────────────────
-        const API_BASE = window.location.origin; // same-origin API server
+        function normalizeBase(url) {
+            const normalized = (url || '').replace(/\/+$/, '');
+            return normalized === 'null' ? '' : normalized;
+        }
+
+        function inferApiBases() {
+            const customFromWindow = normalizeBase(window.SYNAPSE_API_BASE);
+            const customFromQuery = normalizeBase(new URLSearchParams(window.location.search).get('api'));
+            const customFromStorage = normalizeBase(localStorage.getItem('synapse_api_base'));
+            const sameOrigin = normalizeBase(window.location.origin);
+            const fallback18082 = normalizeBase(`${window.location.protocol}//${window.location.hostname}:18082`);
+
+            return [
+                customFromQuery,
+                customFromWindow,
+                customFromStorage,
+                sameOrigin,
+                fallback18082,
+            ].filter((v, i, arr) => v && arr.indexOf(v) === i);
+        }
+
+        const API_BASES = inferApiBases();
+        let activeApiBase = API_BASES[0] || '';
         let allDecisions = [];
         let allActions = [];
 
         // ── Fetch data from n8n ─────────────────────────────
-        async function fetchData() {
-            try {
-                const [decisionsRes, actionsRes] = await Promise.all([
-                    fetch(`${API_BASE}/api/decisions`).catch(() => null),
-                    fetch(`${API_BASE}/api/actions`).catch(() => null),
-                ]);
-
-                if (decisionsRes?.ok) {
-                    allDecisions = await decisionsRes.json();
-                }
-                if (actionsRes?.ok) {
-                    allActions = await actionsRes.json();
-                }
-            } catch (e) {
-                console.log('API not available, using demo data');
-                loadDemoData();
+        async function fetchFromBase(base) {
+            const [decisionsRes, actionsRes] = await Promise.all([
+                fetch(`${base}/api/decisions`).catch(() => null),
+                fetch(`${base}/api/actions`).catch(() => null),
+            ]);
+            if (!decisionsRes?.ok || !actionsRes?.ok) {
+                return null;
             }
+            const [decisions, actions] = await Promise.all([
+                decisionsRes.json(),
+                actionsRes.json(),
+            ]);
+            return { decisions, actions };
+        }
+
+        async function fetchData() {
+            for (const base of API_BASES) {
+                try {
+                    const data = await fetchFromBase(base);
+                    if (!data) continue;
+                    activeApiBase = base;
+                    allDecisions = data.decisions;
+                    allActions = data.actions;
+                    render();
+                    return;
+                } catch (e) {
+                    // Try next candidate base.
+                }
+            }
+
+            console.log('API not available on known endpoints:', API_BASES);
+            allDecisions = [];
+            allActions = [];
             render();
         }
 
@@ -262,7 +300,7 @@
             // Keep the API contract simple: only pending -> done is persisted.
             if (action.status === 'pending') {
                 try {
-                    await fetch(`${API_BASE}/api/actions/complete`, {
+                    await fetch(`${activeApiBase}/api/actions/complete`, {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify({ id }),
