@@ -22,7 +22,7 @@ MEET_GUEST_NAME = os.getenv("MEET_GUEST_NAME", "LogSync Bot")
 MEET_APPROVAL_WAIT_SECONDS = int(os.getenv("MEET_APPROVAL_WAIT_SECONDS", "90"))
 MEET_MIN_SESSION_SECONDS = int(os.getenv("MEET_MIN_SESSION_SECONDS", "120"))
 MEET_USE_FAKE_MEDIA = os.getenv("MEET_USE_FAKE_MEDIA", "false").strip().lower() in {"1", "true", "yes", "on"}
-MEET_GRANT_MEDIA_PERMISSIONS = os.getenv("MEET_GRANT_MEDIA_PERMISSIONS", "false").strip().lower() in {"1", "true", "yes", "on"}
+MEET_GRANT_MEDIA_PERMISSIONS = os.getenv("MEET_GRANT_MEDIA_PERMISSIONS", "true").strip().lower() in {"1", "true", "yes", "on"}
 DEBUG_DIR = Path("/app/data/debug")
 DEBUG_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -77,14 +77,30 @@ class MeetJoiner:
                 log.info("Using anonymous Meet mode (host approval expected)")
 
             log.info(f"Navigating to: {meet_url}")
-            await page.goto(meet_url, wait_until="networkidle", timeout=30000)
-            await asyncio.sleep(3)
+            await page.goto(meet_url, wait_until="domcontentloaded", timeout=45000)
+            await asyncio.sleep(2)
+
+            # Meet can keep persistent network connections that never reach networkidle.
+            # Try a short networkidle wait only as a best-effort signal.
+            try:
+                await page.wait_for_load_state("networkidle", timeout=8000)
+            except Exception:
+                pass
+
+            try:
+                title = await page.title()
+            except Exception:
+                title = "unknown"
+            log.info("Meet page loaded | url=%s | title=%s", page.url, title)
 
             # If Meet redirects to Google auth, perform login and go back.
             await self._login_if_needed(page)
             if "accounts.google.com" in page.url:
-                await page.goto(meet_url, wait_until="networkidle", timeout=30000)
-                await asyncio.sleep(3)
+                log.info("Returned to Google auth page after first navigation; going back to meeting URL")
+                await page.goto(meet_url, wait_until="domcontentloaded", timeout=45000)
+                await asyncio.sleep(2)
+
+            log.info("Scanning pre-join UI for join controls...")
 
             joined = await self._handle_join_ui(page)
             if not joined:
