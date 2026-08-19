@@ -67,12 +67,19 @@ class DecisionStore:
         return self._row_to_dict(row) if row else None
 
     def get_recent_decisions(self, days: int = 7, limit: int = 50) -> list:
-        rows = self.conn.execute(
-            """SELECT * FROM decisions
-               WHERE datetime(created_at) > datetime('now', ?)
-               ORDER BY created_at DESC LIMIT ?""",
-            (f"-{days} days", limit),
-        ).fetchall()
+        if days <= 0:
+            rows = self.conn.execute(
+                """SELECT * FROM decisions
+                   ORDER BY created_at DESC LIMIT ?""",
+                (limit,),
+            ).fetchall()
+        else:
+            rows = self.conn.execute(
+                """SELECT * FROM decisions
+                   WHERE datetime(created_at) > datetime('now', ?)
+                   ORDER BY created_at DESC LIMIT ?""",
+                (f"-{days} days", limit),
+            ).fetchall()
         return [self._row_to_dict(r) for r in rows]
 
     def search_decisions(self, keyword: str, limit: int = 20) -> list:

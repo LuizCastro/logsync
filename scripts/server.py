@@ -33,7 +33,8 @@ class SynapseHandler(SimpleHTTPRequestHandler):
         path = parsed.path
 
         if path == "/api/decisions":
-            self._json_response(self._get_decisions())
+            params = parse_qs(parsed.query)
+            self._json_response(self._get_decisions(params))
         elif path == "/api/actions":
             self._json_response(self._get_actions())
         elif path == "/api/stats":
@@ -68,10 +69,24 @@ class SynapseHandler(SimpleHTTPRequestHandler):
 
     # ── API handlers ─────────────────────────────────────
 
-    def _get_decisions(self):
+    def _get_decisions(self, params=None):
+        params = params or {}
+
+        def _to_int(value, default):
+            try:
+                return int(value)
+            except (TypeError, ValueError):
+                return default
+
+        days = _to_int((params.get("days") or ["0"])[0], 0)
+        limit = _to_int((params.get("limit") or ["1000"])[0], 1000)
+        if limit <= 0:
+            limit = 1000
+        if limit > 5000:
+            limit = 5000
+
         store = DecisionStore(self.db_path)
-        days = 30
-        decisions = store.get_recent_decisions(days=days, limit=100)
+        decisions = store.get_recent_decisions(days=days, limit=limit)
         store.close()
         return decisions
 
@@ -162,7 +177,7 @@ def main():
     print(f"   Banco:     {args.db}")
     print()
     print("Endpoints:")
-    print("  GET  /api/decisions      — listar decisões recentes")
+    print("  GET  /api/decisions      — listar decisões (query: ?days=0&limit=1000)")
     print("  GET  /api/actions        — action items pendentes")
     print("  GET  /api/stats          — estatísticas")
     print("  GET  /api/brief          — daily brief")
