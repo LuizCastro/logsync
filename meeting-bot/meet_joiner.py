@@ -13,8 +13,8 @@ from pathlib import Path
 
 log = logging.getLogger("synapse-bot.joiner")
 
-GOOGLE_EMAIL = os.getenv("BOT_EMAIL") or os.getenv("GOOGLE_BOT_EMAIL", "")
-GOOGLE_PASSWORD = os.getenv("BOT_PASSWORD") or os.getenv("GOOGLE_BOT_PASSWORD", "")
+GOOGLE_EMAIL = os.getenv("GOOGLE_BOT_EMAIL") or os.getenv("BOT_EMAIL", "")
+GOOGLE_PASSWORD = os.getenv("GOOGLE_BOT_PASSWORD") or os.getenv("BOT_PASSWORD", "")
 DEBUG_DIR = Path("/app/data/debug")
 DEBUG_DIR.mkdir(parents=True, exist_ok=True)
 
