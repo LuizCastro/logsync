@@ -5,6 +5,7 @@ Usa a API do Whisper rodando em container separado.
 
 import logging
 import os
+import json
 from pathlib import Path
 
 import aiohttp
@@ -34,10 +35,27 @@ class Transcriber:
             async with aiohttp.ClientSession() as session:
                 async with session.post(url, data=form) as resp:
                     if resp.status == 200:
-                        result = await resp.json()
-                        text = result.get("text", "")
+                        content_type = (resp.headers.get("Content-Type") or "").lower()
+                        raw_body = await resp.text()
+
+                        text = ""
+                        if "application/json" in content_type:
+                            try:
+                                result = json.loads(raw_body)
+                                text = (result.get("text") or "").strip()
+                            except Exception:
+                                text = ""
+                        else:
+                            # Some whisper images return plain text even on 200.
+                            # Try JSON first, then treat the body as transcript text.
+                            try:
+                                result = json.loads(raw_body)
+                                text = (result.get("text") or "").strip()
+                            except Exception:
+                                text = raw_body.strip()
+
                         log.info(f"Whisper API transcription: {len(text)} chars")
-                        return text
+                        return text or None
                     else:
                         log.warning(f"Whisper API returned {resp.status}")
                         return None

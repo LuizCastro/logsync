@@ -33,6 +33,7 @@ WHISPER_URL = os.getenv("WHISPER_URL", "http://synapse-whisper:9000")
 CHECK_INTERVAL_MINUTES = int(os.getenv("CHECK_INTERVAL_MINUTES", "3"))
 RECORDING_DURATION = int(os.getenv("RECORDING_DURATION_SECONDS", "600"))
 WEBHOOK_PORT = int(os.getenv("BOT_WEBHOOK_PORT", "9001"))
+CALENDAR_ENABLED = os.getenv("CALENDAR_ENABLED", "true").strip().lower() in {"1", "true", "yes", "on"}
 
 
 class MeetingBot:
@@ -51,7 +52,10 @@ class MeetingBot:
         await self.calendar.init(self.playwright)
         await self.joiner.init()
 
-        asyncio.create_task(self._calendar_loop())
+        if CALENDAR_ENABLED:
+            asyncio.create_task(self._calendar_loop())
+        else:
+            log.warning("Calendar watcher disabled by CALENDAR_ENABLED=false; manual /join mode only")
 
         app = web.Application()
         app.router.add_post("/join", self.handle_join)
@@ -63,8 +67,11 @@ class MeetingBot:
         await site.start()
 
         log.info(f"Bot webhook on port {WEBHOOK_PORT}")
-        log.info(f"Calendar check every {CHECK_INTERVAL_MINUTES} min")
-        log.info("Invite the bot email to a meeting and it will join automatically!")
+        if CALENDAR_ENABLED:
+            log.info(f"Calendar check every {CHECK_INTERVAL_MINUTES} min")
+            log.info("Invite the bot email to a meeting and it will join automatically!")
+        else:
+            log.info("Calendar auto-join disabled; use POST /join for manual meeting capture")
 
         await asyncio.Event().wait()
 
@@ -100,7 +107,7 @@ class MeetingBot:
         return web.json_response({
             "status": "ok",
             "bot": "synapse-meeting-bot",
-            "calendar": "outlook-playwright",
+            "calendar": "outlook-playwright" if CALENDAR_ENABLED else "disabled",
         })
 
     async def _calendar_loop(self):

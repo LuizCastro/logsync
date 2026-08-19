@@ -13,9 +13,15 @@ from pathlib import Path
 
 log = logging.getLogger("synapse-bot.calendar")
 
+
+def _clean_env(value):
+    if not value:
+        return ""
+    return value.strip().strip('"').strip("'")
+
 CALENDAR_PROVIDER = os.getenv("CALENDAR_PROVIDER", "hotmail").strip().lower()
-BOT_EMAIL = os.getenv("BOT_EMAIL") or os.getenv("GOOGLE_BOT_EMAIL", "")
-BOT_PASSWORD = os.getenv("BOT_PASSWORD") or os.getenv("GOOGLE_BOT_PASSWORD", "")
+BOT_EMAIL = _clean_env(os.getenv("BOT_EMAIL") or os.getenv("GOOGLE_BOT_EMAIL", ""))
+BOT_PASSWORD = _clean_env(os.getenv("BOT_PASSWORD") or os.getenv("GOOGLE_BOT_PASSWORD", ""))
 PROCESSED_DIR = Path("/app/data/processed")
 PROCESSED_DIR.mkdir(parents=True, exist_ok=True)
 DEBUG_DIR = Path("/app/data/debug")
@@ -77,7 +83,13 @@ class CalendarWatcher:
                 raise RuntimeError("email input not found")
 
             await email_input.fill(BOT_EMAIL)
-            await self._advance_after_email()
+            advanced = await self._advance_after_email()
+            if not advanced:
+                if await self._is_account_not_found_state():
+                    await self._dump_login_debug("account-not-found")
+                    raise RuntimeError(
+                        "microsoft account not found for configured BOT_EMAIL; check exact email in .env"
+                    )
 
             pw_input = await self._wait_for_first_visible([
                 '#i0118',
@@ -194,6 +206,20 @@ class CalendarWatcher:
             await self.page.wait_for_timeout(1800)
 
         return await self._is_any_visible(password_selectors)
+
+    async def _is_account_not_found_state(self):
+        """Detect when Microsoft rejects the account identifier before password step."""
+        try:
+            body_text = (await self.page.inner_text("body")).lower()
+        except Exception:
+            return False
+
+        markers = [
+            "we couldn't find a microsoft account",
+            "não foi possível encontrar uma conta microsoft",
+            "couldn't find a microsoft account",
+        ]
+        return any(m in body_text for m in markers)
 
     async def _is_any_visible(self, selectors):
         for sel in selectors:
